@@ -1,0 +1,6 @@
+[
+    {
+        "caption": "Codex: New Message",
+        "command": "codex_prompt"
+    }
+]
