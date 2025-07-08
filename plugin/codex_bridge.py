@@ -1,0 +1,213 @@
+"""Codex subprocess bridge.
+
+This module is responsible for starting the Codex CLI process, sending JSON
+messages and routing replies back to interested listeners.
+
+It is a *refactored* extraction of the original implementation that previously
+resided in ``codex_sublime.py``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import threading
+import uuid
+from typing import Any, Dict, Optional
+
+# ---------------------------------------------------------------------------
+# Configuration ----------------------------------------------------------------
+
+# These defaults are temporary; in a later refactor they will be sourced from a
+# dedicated Sublime-settings file (see PLAN.md – step 2).
+
+CODEX_BIN: str = os.getenv('CODEX_BIN', '/opt/homebrew/bin/codex')
+MODEL: str = os.getenv('CODEX_MODEL13234', 'codex-mini-latest')
+OPENAI_API_KEY: str | None = os.getenv('OPENAI_API_KEY', '')
+
+
+# ---------------------------------------------------------------------------
+# Public helpers -------------------------------------------------------------
+
+
+def kill_process_tree(root_pid: int) -> None:  # pragma: no cover — platform-specific
+    """Best-effort recursive *SIGKILL* ``root_pid`` and all descendants (POSIX).
+
+    On macOS / Linux we rely on ``ps`` because ``psutil`` might not be
+    available inside Sublime's bundled Python.
+    """
+
+    try:
+        output = subprocess.check_output(['ps', '-o', 'pid=', '-o', 'ppid=', '-A'], text=True)
+    except Exception as exc:  # noqa: BLE001 — broad but intentional; we merely log.
+        print('[CodexBridge] ps enumeration failed:', exc)
+        return
+
+    children_map: dict[int, list[int]] = {}
+    for line in output.strip().splitlines():
+        try:
+            pid_str, ppid_str = line.strip().split(None, 1)
+            pid = int(pid_str)
+            ppid = int(ppid_str)
+            children_map.setdefault(ppid, []).append(pid)
+        except ValueError:
+            continue
+
+    to_visit: list[int] = [root_pid]
+    descendants: list[int] = []
+    while to_visit:
+        current = to_visit.pop()
+        for child in children_map.get(current, []):
+            descendants.append(child)
+            to_visit.append(child)
+
+    # Children first, then root.
+    for pid in descendants:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        os.kill(root_pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Bridge implementation ------------------------------------------------------
+
+
+class _CodexBridge:
+    """Manage a *single* Codex subprocess and JSON wire-protocol session."""
+
+    # Future: turn into a context-manager and expose a public API – see PLAN.md
+
+    def __init__(self) -> None:
+        if not OPENAI_API_KEY:
+            raise RuntimeError(
+                'Missing OPENAI_API_KEY – make sure to create an API key '
+                'and expose it either in the environment or the plugin settings.'
+            )
+
+        print('[CodexBridge] launching subprocess')
+
+        env = os.environ.copy()
+        env['OPENAI_API_KEY'] = OPENAI_API_KEY
+
+        popen_kwargs: dict[str, Any] = {
+            'stdin': subprocess.PIPE,
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.STDOUT,
+            'text': True,
+            'bufsize': 1,
+            'env': env,
+            'start_new_session': True,  # separate process-group leader
+        }
+
+        self.proc = subprocess.Popen([CODEX_BIN, 'proto'], **popen_kwargs)  # type: ignore[arg-type]
+
+        self._lock = threading.Lock()
+        self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}
+
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+        # Do initial session configuration.
+        self._configure_session()
+
+    # --------------------------------------------------------------------- API
+
+    def terminate(self) -> None:
+        """Attempt to stop the Codex subprocess and all its descendants."""
+
+        if self.proc.poll() is None:
+            # Kill descendants first, then the root process.
+            kill_process_tree(self.proc.pid)
+
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(self.proc.pid)
+        else:
+            # Process exited – still try to reap stragglers.
+            kill_process_tree(self.proc.pid)
+
+    # ------------------------------------------------------------------ I/O --
+
+    def send(self, obj: Dict[str, Any], cb: Optional[callable[[dict[str, Any]], None]] = None) -> None:
+        """Send a JSON *obj* to Codex and optionally register *cb* for replies."""
+
+        line = json.dumps(obj) + '\n'
+        with self._lock:
+            # The process may have crashed; guard against a broken pipe.
+            try:
+                assert self.proc.stdin is not None  # for mypy
+                self.proc.stdin.write(line)
+                self.proc.stdin.flush()
+            except BrokenPipeError:
+                print('[CodexBridge] Broken pipe while sending data – process dead?')
+                return
+
+        if cb:
+            self._callbacks[obj['id']] = cb
+
+    # -------------------------------------------------------------- internal --
+
+    def _read_loop(self) -> None:
+        """Reader thread – dispatch lines coming from the Codex process."""
+
+        assert self.proc.stdout is not None  # for type-checking
+
+        for line in self.proc.stdout:
+            raw = line.rstrip()
+            print('[Codex raw]', raw)
+
+            idx = raw.find('{')
+            if idx < 0:
+                continue
+
+            try:
+                event: dict[str, Any] = json.loads(raw[idx:])
+            except json.JSONDecodeError as exc:
+                print('[Codex parse error]', exc, raw[idx:])
+                continue
+
+            call_id = event.get('id')
+            msg = event.get('msg', {})
+            msg_type = msg.get('type')
+
+            if call_id in self._callbacks and msg_type in (
+                'assistant_message',
+                'agent_reasoning',
+                'agent_message',
+            ):
+                cb = self._callbacks[call_id]
+                if msg_type in ('assistant_message', 'agent_message'):
+                    del self._callbacks[call_id]
+
+                # Import here to avoid cyc-dep when the module is imported at ST
+                import sublime  # type: ignore
+
+                sublime.set_timeout(lambda _e=event, _c=cb: _c(_e), 0)
+
+    # -------------------------------------------------------- configuration --
+
+    def _configure_session(self) -> None:
+        cfg_id = str(uuid.uuid4())
+        self.send(
+            {
+                'id': cfg_id,
+                'op': {
+                    'type': 'configure_session',
+                    'model': MODEL,
+                    'approval_policy': 'unless-allow-listed',
+                    'sandbox_policy': {'permissions': [], 'mode': 'read-only'},
+                    'cwd': '.',
+                },
+            },
+            cb=None,
+        )
