@@ -63,6 +63,18 @@ def kill_process_tree(root_pid: int) -> None:  # pragma: no cover — platform-s
             descendants.append(child)
             to_visit.append(child)
 
+    # Attempt to kill the entire process-group first – many children may share
+    # the same PGID.  We do this *after* enumerating so we can still discover
+    # descendants before their PPIDs change to 1 (init) once the root exits.
+
+    try:
+        pgid = os.getpgid(root_pid)
+        if pgid > 0:
+            os.killpg(pgid, signal.SIGKILL)
+    except Exception:
+        # Ignore – best effort only.
+        pass
+
     # Children first, then root.
     for pid in descendants:
         try:
