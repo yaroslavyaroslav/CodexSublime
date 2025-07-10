@@ -10,6 +10,29 @@ import sublime_plugin  # type: ignore
 from .bridge_manager import get_bridge
 
 # ---------------------------------------------------------------------------
+# Transcript view helpers
+# ---------------------------------------------------------------------------
+
+
+TRANSCRIPT_VIEW_SETTING_KEY = 'codex_transcript_view_id'
+
+
+def _get_transcript_view(window: sublime.Window) -> sublime.View | None:  # type: ignore[name-defined]
+    """Return the transcript view if it exists for *window*."""
+
+    vid = window.settings().get(TRANSCRIPT_VIEW_SETTING_KEY)
+    if vid is None:
+        return None
+
+    for v in window.views():
+        if v.id() == vid:
+            return v
+
+    # View disappeared – clean up.
+    window.settings().erase(TRANSCRIPT_VIEW_SETTING_KEY)
+    return None
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -38,13 +61,20 @@ def _extract_text(msg: dict) -> str | None:
 def _display_assistant_response(window: sublime.Window, prompt: str, event: dict) -> None:  # type: ignore[name-defined]
     """Append the Codex *event* to output panel using markdown formatting."""
 
-    panel = window.find_output_panel('codex') or window.create_output_panel('codex')
-    panel.set_read_only(False)
-    panel.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+    target_view = _get_transcript_view(window)
 
-    panel.settings().set('scroll_past_end', True)
-    panel.settings().set('gutter', True)
-    panel.settings().set('line_numbers', False)
+    if target_view is None:
+        target_view = window.find_output_panel('codex') or window.create_output_panel('codex')
+        is_panel = True
+    else:
+        is_panel = False
+
+    target_view.set_read_only(False)
+    target_view.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+
+    target_view.settings().set('scroll_past_end', True)
+    target_view.settings().set('gutter', True)
+    target_view.settings().set('line_numbers', False)
 
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
@@ -52,12 +82,25 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     text = _extract_text(msg)
 
     header = f'## {msg_type}\n\n'
-    body = (text + '\n\n') if text else ''
 
-    panel.run_command('append', {'characters': header + body})
+    if text and msg_type == 'exec_command_end':
+        # Sometime codex add \n to the end some times don't,
+        # so it's better to be safe than sorry.
+        body = f'```bash\n{text}\n```\n\n'
+    else:
+        body = (text + '\n\n') if text else ''
 
-    panel.set_read_only(True)
-    window.run_command('show_panel', {'panel': 'output.codex'})
+    target_view.run_command('append', {'characters': header + body, 'force': True})
+
+    if not is_panel:
+        # Scroll to bottom in tab view.
+        target_view.show(target_view.size())
+
+    # Restore read-only
+    target_view.set_read_only(True)
+
+    if is_panel:
+        window.run_command('show_panel', {'panel': 'output.codex'})
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +120,7 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 
         panel = window.create_output_panel(self.INPUT_PANEL_NAME)
         panel.set_read_only(False)
+        panel.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
         panel.settings().set('scroll_past_end', True)
         panel.settings().set('gutter', True)
         panel.settings().set('line_numbers', False)
@@ -132,8 +176,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event),
         )
 
-        # Immediately show the user's prompt so it is visible before Codex
-        # starts streaming any reasoning/result events.
+        # Show the user's prompt immediately.
         _display_assistant_response(
             self.window,
             prompt,
@@ -144,3 +187,24 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
                 }
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Transcript tab opener
+# ---------------------------------------------------------------------------
+
+
+class CodexOpenTranscriptCommand(sublime_plugin.WindowCommand):
+    """Open (or focus) the dedicated Codex transcript tab."""
+
+    def run(self) -> None:  # noqa: D401 – ST API shape
+        view = _get_transcript_view(self.window)
+        if view is None:
+            view = self.window.new_file()
+            view.set_name('Codex Transcript')
+            view.set_scratch(True)
+            view.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+
+            self.window.settings().set(TRANSCRIPT_VIEW_SETTING_KEY, view.id())
+
+        self.window.focus_view(view)

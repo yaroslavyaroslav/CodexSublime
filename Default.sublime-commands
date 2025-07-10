@@ -2,5 +2,9 @@
     {
         "caption": "Codex: New Message",
         "command": "codex_prompt"
+    },
+    {
+        "caption": "Codex: Open Transcript Tab",
+        "command": "codex_open_transcript"
     }
 ]
