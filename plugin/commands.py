@@ -14,9 +14,6 @@ from .bridge_manager import get_bridge
 # ---------------------------------------------------------------------------
 
 
-PROMPT_SHOWN_IDS: set[str] = set()
-
-
 def _extract_text(msg: dict) -> str | None:
     msg_type = msg.get('type')
 
@@ -38,7 +35,7 @@ def _extract_text(msg: dict) -> str | None:
     return None
 
 
-def _display_assistant_response(window: sublime.Window, prompt: str, call_id: str, event: dict) -> None:  # type: ignore[name-defined]
+def _display_assistant_response(window: sublime.Window, prompt: str, event: dict) -> None:  # type: ignore[name-defined]
     """Append the Codex *event* to output panel using markdown formatting."""
 
     panel = window.find_output_panel('codex') or window.create_output_panel('codex')
@@ -49,22 +46,15 @@ def _display_assistant_response(window: sublime.Window, prompt: str, call_id: st
     panel.settings().set('gutter', True)
     panel.settings().set('line_numbers', False)
 
-    content_parts: list[str] = []
-
-    # Print user prompt once.
-    if call_id not in PROMPT_SHOWN_IDS:
-        PROMPT_SHOWN_IDS.add(call_id)
-        content_parts.append(f'## user_input\n{prompt}\n')
-
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
 
     text = _extract_text(msg)
-    if text is not None:
-        content_parts.append(f'## {msg_type}\n{text}\n')
 
-    if content_parts:
-        panel.run_command('append', {'characters': '\n'.join(content_parts) + '\n'})
+    header = f'## {msg_type}\n\n'
+    body = (text + '\n\n') if text else ''
+
+    panel.run_command('append', {'characters': header + body})
 
     panel.set_read_only(True)
     window.run_command('show_panel', {'panel': 'output.codex'})
@@ -139,9 +129,18 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
                     'items': [{'type': 'text', 'text': prompt}],
                 },
             },
-            cb=lambda event, p=prompt, cid=msg_id: _display_assistant_response(self.window, p, cid, event),
+            cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event),
         )
 
         # Immediately show the user's prompt so it is visible before Codex
         # starts streaming any reasoning/result events.
-        _display_assistant_response(self.window, prompt, msg_id, {'msg': {'type': 'user_input'}})
+        _display_assistant_response(
+            self.window,
+            prompt,
+            {
+                'msg': {
+                    'type': 'user_input',
+                    'text': prompt,
+                }
+            },
+        )
