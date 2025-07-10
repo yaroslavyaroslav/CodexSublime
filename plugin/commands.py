@@ -1,27 +1,112 @@
-"""Sublime Text commands exposed by the Codex plugin."""
+"""Sublime Text commands and panel workflow for Codex."""
 
 from __future__ import annotations
 
 import uuid
 
-import sublime
-import sublime_plugin
+import sublime  # type: ignore
+import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-class CodexPromptCommand(sublime_plugin.TextCommand):
-    """Send the selected text to Codex and display the answer in a panel."""
 
-    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
-        prompt = self._collect_prompt()
-        if not prompt:
-            sublime.status_message('Select some text first')
+def _display_assistant_response(window: sublime.Window, prompt: str, event: dict) -> None:  # type: ignore[name-defined]
+    """Render Codex's *event* in a read-only output panel."""
+
+    msg = event.get('msg', {})
+    msg_type = msg.get('type')
+
+    if msg_type == 'assistant_message':
+        items = msg.get('items', [])
+        text_items = [i.get('text', '') for i in items if i.get('type') == 'text']
+    else:
+        for key in (
+            'text',
+            'message',
+            'last_agent_message',
+            'command',
+            'stdout',
+            'stderr',
+        ):
+            if key in msg:
+                text_items = [msg.get(key, '')]
+                break
+        else:
             return
 
-        bridge = get_bridge(self.view.window())
+    if not any(text_items):
+        return
 
+    panel = window.find_output_panel('codex') or window.create_output_panel('codex')
+    panel.set_read_only(False)
+
+    content = '>>> ' + prompt + '\n' + ''.join(text_items) + '\n\n'
+    panel.run_command('append', {'characters': content})
+
+    panel.set_read_only(True)
+    window.run_command('show_panel', {'panel': 'output.codex'})
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+class CodexPromptCommand(sublime_plugin.TextCommand):
+    """Open an *output panel* so the user can type a prompt."""
+
+    INPUT_PANEL_NAME = 'codex_input'
+
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is None:
+            return
+
+        panel = window.create_output_panel(self.INPUT_PANEL_NAME)
+        panel.set_read_only(False)
+
+        # Pre-fill selection, if any, as a convenience.
+        initial_text = self._selected_text()
+        if initial_text:
+            panel.run_command('append', {'characters': initial_text})
+
+        window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
+
+    # ---------------------------------------------------------------------
+
+    def _selected_text(self) -> str | None:
+        for region in self.view.sel():
+            if not region.empty():
+                return self.view.substr(region)
+        return None
+
+
+class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
+    """Submit the content of the *codex_input* panel to Codex (⌘/Ctrl+Enter)."""
+
+    INPUT_PANEL_NAME = 'codex_input'
+
+    def run(self) -> None:  # noqa: D401 – ST API shape
+        panel_view = self.window.find_output_panel(self.INPUT_PANEL_NAME)
+        if panel_view is None:
+            sublime.status_message('Codex: no input panel open')
+            return
+
+        prompt = panel_view.substr(sublime.Region(0, panel_view.size())).strip()
+        if not prompt:
+            sublime.status_message('Codex: prompt is empty')
+            return
+
+        # Close the panel before sending to Codex.
+        self.window.run_command('hide_panel')
+
+        bridge = get_bridge(self.window)
         msg_id = str(uuid.uuid4())
+
         bridge.send(
             {
                 'id': msg_id,
@@ -30,52 +115,5 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
                     'items': [{'type': 'text', 'text': prompt}],
                 },
             },
-            cb=lambda event: self._handle_event(event, prompt),
+            cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event),
         )
-
-    # --------------------------------------------------------------------- helpers
-
-    def _collect_prompt(self) -> str | None:
-        view = self.view
-        for region in view.sel():
-            if not region.empty():
-                return view.substr(region)
-        return None
-
-    def _handle_event(self, event: dict, prompt: str) -> None:  # noqa: D401 – simple
-        msg = event.get('msg', {})
-        msg_type = msg.get('type')
-
-        # Collect any text we can display from the various message shapes.
-        if msg_type == 'assistant_message':
-            items = msg.get('items', [])
-            text_items = [i.get('text', '') for i in items if i.get('type') == 'text']
-        else:
-            for key in (
-                'text',
-                'message',
-                'last_agent_message',
-                'command',
-                'stdout',
-                'stderr',
-            ):
-                if key in msg:
-                    text_items = [msg.get(key, '')]
-                    break
-            else:
-                return  # nothing we know how to display
-
-        if not any(text_items):
-            return
-
-        window = self.view.window()
-        assert window is not None
-
-        panel = window.find_output_panel('codex') or window.create_output_panel('codex')
-        panel.set_read_only(False)
-
-        content = '>>> ' + prompt + '\n' + ''.join(text_items) + '\n\n'
-        panel.run_command('append', {'characters': content})
-
-        panel.set_read_only(True)
-        window.run_command('show_panel', {'panel': 'output.codex'})
