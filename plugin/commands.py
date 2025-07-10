@@ -43,6 +43,11 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     panel = window.find_output_panel('codex') or window.create_output_panel('codex')
     panel.set_read_only(False)
+    panel.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+
+    panel.settings().set('scroll_past_end', True)
+    panel.settings().set('gutter', True)
+    panel.settings().set('line_numbers', True)
 
     content = '>>> ' + prompt + '\n' + ''.join(text_items) + '\n\n'
     panel.run_command('append', {'characters': content})
@@ -68,6 +73,10 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 
         panel = window.create_output_panel(self.INPUT_PANEL_NAME)
         panel.set_read_only(False)
+        panel.settings().set('scroll_past_end', True)
+        panel.settings().set('gutter', True)
+        panel.settings().set('line_numbers', False)
+        panel.settings().set('fold_buttons', False)
 
         # Pre-fill selection, if any, as a convenience.
         initial_text = self._selected_text()
