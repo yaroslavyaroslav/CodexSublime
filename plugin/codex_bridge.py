@@ -192,11 +192,7 @@ class _CodexBridge:
             msg = event.get('msg', {})
             msg_type = msg.get('type')
 
-            if call_id in self._callbacks and msg_type in (
-                'assistant_message',
-                'agent_reasoning',
-                'agent_message',
-            ):
+            if call_id in self._callbacks:
                 cb = self._callbacks[call_id]
                 if msg_type in ('assistant_message', 'agent_message'):
                     del self._callbacks[call_id]

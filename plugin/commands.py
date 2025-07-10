@@ -14,32 +14,32 @@ from .bridge_manager import get_bridge
 # ---------------------------------------------------------------------------
 
 
-def _display_assistant_response(window: sublime.Window, prompt: str, event: dict) -> None:  # type: ignore[name-defined]
-    """Render Codex's *event* in a read-only output panel."""
+PROMPT_SHOWN_IDS: set[str] = set()
 
-    msg = event.get('msg', {})
+
+def _extract_text(msg: dict) -> str | None:
     msg_type = msg.get('type')
 
     if msg_type == 'assistant_message':
         items = msg.get('items', [])
-        text_items = [i.get('text', '') for i in items if i.get('type') == 'text']
-    else:
-        for key in (
-            'text',
-            'message',
-            'last_agent_message',
-            'command',
-            'stdout',
-            'stderr',
-        ):
-            if key in msg:
-                text_items = [msg.get(key, '')]
-                break
-        else:
-            return
+        return ''.join(i.get('text', '') for i in items if i.get('type') == 'text')
 
-    if not any(text_items):
-        return
+    for key in (
+        'text',
+        'message',
+        'last_agent_message',
+        'command',
+        'stdout',
+        'stderr',
+    ):
+        if key in msg:
+            return str(msg.get(key, ''))
+
+    return None
+
+
+def _display_assistant_response(window: sublime.Window, prompt: str, call_id: str, event: dict) -> None:  # type: ignore[name-defined]
+    """Append the Codex *event* to output panel using markdown formatting."""
 
     panel = window.find_output_panel('codex') or window.create_output_panel('codex')
     panel.set_read_only(False)
@@ -47,10 +47,24 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     panel.settings().set('scroll_past_end', True)
     panel.settings().set('gutter', True)
-    panel.settings().set('line_numbers', True)
+    panel.settings().set('line_numbers', False)
 
-    content = '>>> ' + prompt + '\n' + ''.join(text_items) + '\n\n'
-    panel.run_command('append', {'characters': content})
+    content_parts: list[str] = []
+
+    # Print user prompt once.
+    if call_id not in PROMPT_SHOWN_IDS:
+        PROMPT_SHOWN_IDS.add(call_id)
+        content_parts.append(f'## user_input\n{prompt}\n')
+
+    msg = event.get('msg', {})
+    msg_type: str = msg.get('type', 'unknown')
+
+    text = _extract_text(msg)
+    if text is not None:
+        content_parts.append(f'## {msg_type}\n{text}\n')
+
+    if content_parts:
+        panel.run_command('append', {'characters': '\n'.join(content_parts) + '\n'})
 
     panel.set_read_only(True)
     window.run_command('show_panel', {'panel': 'output.codex'})
@@ -84,6 +98,7 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
             panel.run_command('append', {'characters': initial_text})
 
         window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
+        window.focus_view(panel)
 
     # ---------------------------------------------------------------------
 
@@ -124,5 +139,9 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
                     'items': [{'type': 'text', 'text': prompt}],
                 },
             },
-            cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event),
+            cb=lambda event, p=prompt, cid=msg_id: _display_assistant_response(self.window, p, cid, event),
         )
+
+        # Immediately show the user's prompt so it is visible before Codex
+        # starts streaming any reasoning/result events.
+        _display_assistant_response(self.window, prompt, msg_id, {'msg': {'type': 'user_input'}})
