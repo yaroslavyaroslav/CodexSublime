@@ -14,22 +14,15 @@ from .bridge_manager import get_bridge
 # ---------------------------------------------------------------------------
 
 
-TRANSCRIPT_VIEW_SETTING_KEY = 'codex_transcript_view_id'
+TRANSCRIPT_VIEW_FLAG = 'codex_is_transcript'
 
 
 def _get_transcript_view(window: sublime.Window) -> sublime.View | None:  # type: ignore[name-defined]
-    """Return the transcript view if it exists for *window*."""
-
-    vid = window.settings().get(TRANSCRIPT_VIEW_SETTING_KEY)
-    if vid is None:
-        return None
+    """Find and return the Codex transcript view in *window* (if any)."""
 
     for v in window.views():
-        if v.id() == vid:
+        if v.settings().get(TRANSCRIPT_VIEW_FLAG):
             return v
-
-    # View disappeared – clean up.
-    window.settings().erase(TRANSCRIPT_VIEW_SETTING_KEY)
     return None
 
 # ---------------------------------------------------------------------------
@@ -205,6 +198,6 @@ class CodexOpenTranscriptCommand(sublime_plugin.WindowCommand):
             view.set_scratch(True)
             view.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
 
-            self.window.settings().set(TRANSCRIPT_VIEW_SETTING_KEY, view.id())
+            view.settings().set(TRANSCRIPT_VIEW_FLAG, True)
 
         self.window.focus_view(view)
