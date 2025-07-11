@@ -17,6 +17,8 @@ import threading
 import uuid
 from typing import Any, Dict, Optional
 
+import sublime
+
 # ---------------------------------------------------------------------------
 # Configuration ----------------------------------------------------------------
 
@@ -25,7 +27,6 @@ from typing import Any, Dict, Optional
 
 CODEX_BIN: str = os.getenv('CODEX_BIN', '/opt/homebrew/bin/codex')
 MODEL: str = os.getenv('CODEX_MODEL13234', 'codex-mini-latest')
-OPENAI_API_KEY: str | None = os.getenv('OPENAI_API_KEY', '')
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,8 @@ class _CodexBridge:
     # Future: turn into a context-manager and expose a public API – see PLAN.md
 
     def __init__(self) -> None:
+        settings = sublime.load_settings('Codex.sublime-settings')
+        OPENAI_API_KEY: str = settings.get('token', '')  # type: ignore[name-defined]
         if not OPENAI_API_KEY:
             raise RuntimeError(
                 'Missing OPENAI_API_KEY – make sure to create an API key '
