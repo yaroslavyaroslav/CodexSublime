@@ -6,5 +6,9 @@
     {
         "caption": "Codex: Open Transcript Tab",
         "command": "codex_open_transcript"
+    },
+    {
+        "caption": "Codex: Reset Chat",
+        "command": "codex_reset_chat"
     }
 ]
