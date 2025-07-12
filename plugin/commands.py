@@ -73,16 +73,31 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
 
-    text = _extract_text(msg)
-
     header = f'## {msg_type}\n\n'
 
-    if text and msg_type == 'exec_command_end':
-        # Sometime codex add \n to the end some times don't,
-        # so it's better to be safe than sorry.
-        body = f'```bash\n{text}\n```\n\n'
+    body = ''
+
+    if msg_type == 'exec_command_begin':
+        cmd_list = msg.get('command', [])
+        cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
+        body = f'```bash\n{cmd_str}\n```\n\n'
+
+    elif msg_type == 'exec_command_end':
+        exit_code = msg.get('exit_code', 0)
+        stderr = msg.get('stderr', '')
+        stdout = msg.get('stdout', '')
+
+        if exit_code and exit_code != 0:
+            body += f'`exit_code:{exit_code}`\n\n'
+
+        output_text = stderr if stderr else stdout
+        if output_text:
+            body += f'```bash\n{output_text}\n```\n\n'
+
     else:
-        body = (text + '\n\n') if text else ''
+        text = _extract_text(msg)
+        if text:
+            body = f'{text}\n\n'
 
     target_view.run_command('append', {'characters': header + body, 'force': True})
 
