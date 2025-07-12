@@ -1,3 +1,4 @@
 {
+    "codex_path": "/opt/homebrew/bin/codex",
     "token": "<your-token>",
 }

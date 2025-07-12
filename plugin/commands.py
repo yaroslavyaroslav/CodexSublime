@@ -25,6 +25,7 @@ def _get_transcript_view(window: sublime.Window) -> sublime.View | None:  # type
             return v
     return None
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -144,12 +145,12 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
     def run(self) -> None:  # noqa: D401 – ST API shape
         panel_view = self.window.find_output_panel(self.INPUT_PANEL_NAME)
         if panel_view is None:
-            sublime.status_message('Codex: no input panel open')
+            sublime.status_message('no input panel open')
             return
 
         prompt = panel_view.substr(sublime.Region(0, panel_view.size())).strip()
         if not prompt:
-            sublime.status_message('Codex: prompt is empty')
+            sublime.status_message('prompt is empty')
             return
 
         # Close the panel before sending to Codex.
@@ -192,12 +193,58 @@ class CodexOpenTranscriptCommand(sublime_plugin.WindowCommand):
 
     def run(self) -> None:  # noqa: D401 – ST API shape
         view = _get_transcript_view(self.window)
+        newly_created = False
         if view is None:
             view = self.window.new_file()
-            view.set_name('Codex Transcript')
+            newly_created = True
+            view.set_name('Codex')
             view.set_scratch(True)
             view.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
-
             view.settings().set(TRANSCRIPT_VIEW_FLAG, True)
 
+        # If we just created the tab, seed it with the existing output panel
+        # contents (if any) so earlier conversation context is preserved.
+        if newly_created:
+            panel_view = self.window.find_output_panel('codex')
+            if panel_view is not None:
+                content = panel_view.substr(sublime.Region(0, panel_view.size()))
+                if content:
+                    view.run_command('append', {'characters': content, 'force': True})
+
         self.window.focus_view(view)
+
+
+# ---------------------------------------------------------------------------
+# Reset chat command
+# ---------------------------------------------------------------------------
+
+
+class CodexResetChatCommand(sublime_plugin.WindowCommand):
+    """Clear transcript / panel and terminate the Codex subprocess for window."""
+
+    def run(self) -> None:  # noqa: D401 – ST API shape
+        from . import bridge_manager as bm
+
+        # 1. Terminate existing bridge (if any)
+        key = self.window.id()
+        bridge = bm.bridges.pop(key, None)
+        if bridge is not None:
+            bridge.terminate()
+
+        # 2. Clear transcript view
+        transcript = _get_transcript_view(self.window)
+        if transcript is not None:
+            transcript.set_read_only(False)
+            transcript.run_command('select_all')
+            transcript.run_command('right_delete')
+            transcript.set_read_only(True)
+
+        # 3. Clear output panel
+        panel_view = self.window.find_output_panel('codex')
+        if panel_view is not None:
+            panel_view.set_read_only(False)
+            panel_view.run_command('select_all')
+            panel_view.run_command('right_delete')
+            panel_view.set_read_only(True)
+
+        sublime.status_message('Codex chat reset – new session will start with next prompt')

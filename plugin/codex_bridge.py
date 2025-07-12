@@ -21,14 +21,6 @@ from typing import Any, Dict, Optional
 import sublime
 
 logger = logging.getLogger(__name__)
-# Configuration ----------------------------------------------------------------
-
-# These defaults are temporary; in a later refactor they will be sourced from a
-# dedicated Sublime-settings file (see PLAN.md – step 2).
-
-CODEX_BIN: str = os.getenv('CODEX_BIN', '/opt/homebrew/bin/codex')
-MODEL: str = os.getenv('CODEX_MODEL13234', 'codex-mini-latest')
-
 
 # ---------------------------------------------------------------------------
 # Public helpers -------------------------------------------------------------
@@ -123,7 +115,11 @@ class _CodexBridge:
             'start_new_session': True,  # separate process-group leader
         }
 
-        self.proc = subprocess.Popen([CODEX_BIN, 'proto'], **popen_kwargs)  # type: ignore[arg-type]
+        codex_bin: str = settings.get('codex_path', '/opt/homebrew/bin/codex')  # type: ignore[arg-type]
+        self.proc = subprocess.Popen(
+            [codex_bin, 'proto'],
+            **popen_kwargs,
+        )
 
         self._lock = threading.Lock()
         self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}
@@ -201,24 +197,31 @@ class _CodexBridge:
                 if msg_type in ('assistant_message', 'agent_message'):
                     del self._callbacks[call_id]
 
-                # Import here to avoid cyc-dep when the module is imported at ST
-                import sublime  # type: ignore
-
                 sublime.set_timeout(lambda _e=event, _c=cb: _c(_e), 0)
 
     # -------------------------------------------------------- configuration --
 
     def _configure_session(self) -> None:
         cfg_id = str(uuid.uuid4())
+        window = sublime.active_window()
+        folders = window.folders() if window else []
+        cwd = folders[0] if folders else os.getcwd()
+        cwd = os.path.abspath(cwd)
         self.send(
             {
                 'id': cfg_id,
                 'op': {
                     'type': 'configure_session',
-                    'model': MODEL,
+                    'model': 'o3',
                     'approval_policy': 'unless-allow-listed',
+                    'provider': {
+                        'name': 'openai',
+                        'base_url': 'https://api.openai.com/v1',
+                        'wire_api': 'responses',
+                        'env_key': 'OPENAI_API_KEY',
+                    },
                     'sandbox_policy': {'permissions': [], 'mode': 'read-only'},
-                    'cwd': '.',
+                    'cwd': cwd,
                 },
             },
             cb=None,
