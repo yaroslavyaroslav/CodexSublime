@@ -90,14 +90,19 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
         if exit_code and exit_code != 0:
             body += f'`exit_code: {exit_code}`\n\n'
+            output_text = stderr if stderr else stdout
+            label = 'stderr' if stderr else 'stdout'
+        else:
+            output_text = stdout if stdout else ''
+            label = 'stdout' if output_text else ''
 
-        output_text = stderr if stderr else stdout
         if output_text:
-            stream_label = 'stderr' if stderr else 'stdout'
-            body += f'`{stream_label}`:\n```bash\n{output_text}\n```\n\n'
+            body += f'`{label}`:\n```bash\n{output_text}\n```\n\n'
 
     else:
-        header = f'## {msg_type}\n\n' if msg_type == 'user_input' else f'### {msg_type}\n\n'
+        header = (
+            f'## {msg_type}\n\n' if msg_type in ['user_input', 'agent_message'] else f'### {msg_type}\n\n'
+        )
         text = _extract_text(msg)
         if text:
             body = f'{text}\n\n'
