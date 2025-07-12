@@ -119,7 +119,12 @@ class _CodexBridge:
                 'and expose it either in the environment or the plugin settings.'
             )
 
-        logger.debug('launching subprocess')
+        # Decide working directory: first project folder or current.
+        window = sublime.active_window()
+        project_folders = window.folders() if window else []
+        self._cwd = os.path.abspath(project_folders[0] if project_folders else os.getcwd())
+
+        logger.debug('Launching Codex subprocess (cwd=%s)', self._cwd)
 
         env = os.environ.copy()
         env['OPENAI_API_KEY'] = OPENAI_API_KEY
@@ -131,6 +136,7 @@ class _CodexBridge:
             'text': True,
             'bufsize': 1,
             'env': env,
+            'cwd': self._cwd,
             'start_new_session': True,  # separate process-group leader
         }
 
@@ -222,11 +228,7 @@ class _CodexBridge:
 
     def _configure_session(self) -> None:
         cfg_id = str(uuid.uuid4())
-        window = sublime.active_window()
-        folders = window.folders() if window else []
-        cwd = folders[0] if folders else os.getcwd()
-        cwd = os.path.abspath(cwd)
-        logger.debug('Codex cwd: %s', cwd)
+        cwd = self._cwd
 
         conf = _project_settings()
 
