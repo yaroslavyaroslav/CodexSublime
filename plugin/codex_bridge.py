@@ -168,7 +168,6 @@ class _CodexBridge:
         # Do initial session configuration.
         self._configure_session()
 
-
     # --------------------------------------------------------------------- API
 
     def terminate(self) -> None:
@@ -291,7 +290,7 @@ class _CodexBridge:
         # not attempt to de-duplicate entries – the underlying sandbox logic
         # typically handles that, and the cost of a few duplicates is
         # negligible.
-        permissions = ['/private/tmp', '/opt/homebrew', cwd] + self._project_folders + extra_perms
+        permissions = ['/private/tmp', cwd] + self._project_folders + extra_perms
 
         self.send(
             {
