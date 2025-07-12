@@ -97,7 +97,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
             label = 'stdout' if output_text else ''
 
         if output_text:
-            body += f'`{label}`:\n```bash\n{output_text}\n```\n\n'
+            body += f'`{label}`:\n```\n{output_text}\n```\n\n'
 
     else:
         header = (
@@ -287,5 +287,19 @@ class CodexResetChatCommand(sublime_plugin.WindowCommand):
             panel_view.run_command('select_all')
             panel_view.run_command('right_delete')
             panel_view.set_read_only(True)
+
+        # 4. Remove persisted session_id (if any) so that the next prompt
+        #    starts a brand new conversation but keeps other Codex project
+        #    configuration intact.
+        data = self.window.project_data()
+        if data is not None:
+            settings_block = data.get('settings') or {}
+            codex_cfg = settings_block.get('codex') or {}
+
+            if 'session_id' in codex_cfg:
+                codex_cfg['session_id'] = None
+                settings_block['codex'] = codex_cfg
+                data['settings'] = settings_block
+                self.window.set_project_data(data)
 
         sublime.status_message('Codex chat reset – new session will start with next prompt')

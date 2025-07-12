@@ -122,7 +122,15 @@ class _CodexBridge:
         # Decide working directory: first project folder or current.
         window = sublime.active_window()
         project_folders = window.folders() if window else []
-        self._cwd = os.path.abspath(project_folders[0] if project_folders else os.getcwd())
+
+        # Normalize all project folders to absolute paths so they can be used
+        # safely within the sandbox *permissions* list later on.
+        self._project_folders = [os.path.abspath(p) for p in project_folders]
+
+        # The *cwd* for the Codex subprocess is still the first project folder
+        # (if any) to preserve existing behaviour, otherwise it falls back to
+        # the current working directory.
+        self._cwd = os.path.abspath(self._project_folders[0] if self._project_folders else os.getcwd())
 
         logger.debug('Launching Codex subprocess (cwd=%s)', self._cwd)
 
@@ -149,11 +157,17 @@ class _CodexBridge:
         self._lock = threading.Lock()
         self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}
 
+        # Determine and (if possible) persist a *session_id* so that we can
+        # resume the same chat after restarting Sublime Text (provided the
+        # user works inside a saved project).
+        self._session_id = self._ensure_session_id(window)
+
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
         # Do initial session configuration.
         self._configure_session()
+
 
     # --------------------------------------------------------------------- API
 
@@ -224,10 +238,46 @@ class _CodexBridge:
 
                 sublime.set_timeout(lambda _e=event, _c=cb: _c(_e), 0)
 
+    # ------------------------------------------------ session persistence --
+
+    @staticmethod
+    def _ensure_session_id(window: Optional['sublime.Window']) -> str:  # type: ignore[name-defined]
+        """Return a stable *session_id* for *window* and persist it in the
+        current project if possible.
+
+        If *window* is associated with a saved Sublime project we store the
+        identifier under ``project_data()['codex']['session_id']`` so that it
+        can be reused after restarting Sublime Text.  For ad-hoc / folder
+        windows we simply generate a fresh UUID on every launch (because there
+        is no place to persist it without creating an unsaved project file).
+        """
+
+        # No window or no project → return a fresh ID each time.
+        if window is None:
+            return str(uuid.uuid4())
+
+        data = window.project_data()
+        if data is None:
+            return str(uuid.uuid4())
+
+        settings_block = data.get('settings') or {}
+        codex_cfg = settings_block.get('codex') or {}
+
+        session_id: Optional[str] = codex_cfg.get('session_id')
+
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            codex_cfg['session_id'] = session_id
+            settings_block['codex'] = codex_cfg
+            data['settings'] = settings_block
+            window.set_project_data(data)
+
+        return session_id
+
     # -------------------------------------------------------- configuration --
 
     def _configure_session(self) -> None:
-        cfg_id = str(uuid.uuid4())
+        cfg_id = self._session_id  # stable across restarts in projects
         cwd = self._cwd
 
         conf = _project_settings()
@@ -236,7 +286,12 @@ class _CodexBridge:
         if isinstance(extra_perms, str):
             extra_perms = [extra_perms]
 
-        permissions = ['/private/tmp', '/opt/homebrew', cwd] + extra_perms
+        # Combine default sandbox roots with all project folders and any
+        # additional permissions specified by the user.  We purposefully do
+        # not attempt to de-duplicate entries – the underlying sandbox logic
+        # typically handles that, and the cost of a few duplicates is
+        # negligible.
+        permissions = ['/private/tmp', '/opt/homebrew', cwd] + self._project_folders + extra_perms
 
         self.send(
             {
