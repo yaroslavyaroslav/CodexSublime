@@ -73,28 +73,31 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
 
-    header = f'## {msg_type}\n\n'
-
     body = ''
-
-    if msg_type == 'exec_command_begin':
+    if msg_type == 'task_started':
+        header = '## Task started\n\n'
+    elif msg_type == 'exec_command_begin':
+        header = '### Command call\n\n'
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
         body = f'```bash\n{cmd_str}\n```\n\n'
 
     elif msg_type == 'exec_command_end':
+        header = ''
         exit_code = msg.get('exit_code', 0)
         stderr = msg.get('stderr', '')
         stdout = msg.get('stdout', '')
 
         if exit_code and exit_code != 0:
-            body += f'`exit_code:{exit_code}`\n\n'
+            body += f'`exit_code: {exit_code}`\n\n'
 
         output_text = stderr if stderr else stdout
         if output_text:
-            body += f'```bash\n{output_text}\n```\n\n'
+            stream_label = 'stderr' if stderr else 'stdout'
+            body += f'`{stream_label}`:\n```bash\n{output_text}\n```\n\n'
 
     else:
+        header = f'## {msg_type}\n\n' if msg_type == 'user_input' else f'### {msg_type}\n\n'
         text = _extract_text(msg)
         if text:
             body = f'{text}\n\n'
@@ -135,20 +138,37 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
         panel.settings().set('line_numbers', False)
         panel.settings().set('fold_buttons', False)
 
-        # Pre-fill selection, if any, as a convenience.
-        initial_text = self._selected_text()
+        # Pre-fill selection, if any, with optional code-fence wrapping.
+        initial_text = self._collect_selection_with_fence()
         if initial_text:
             panel.run_command('append', {'characters': initial_text})
+
+        # Put caret at end so user can continue typing.
+        panel.sel().clear()
+        panel.sel().add(sublime.Region(panel.size()))
 
         window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
         window.focus_view(panel)
 
     # ---------------------------------------------------------------------
 
-    def _selected_text(self) -> str | None:
+    def _collect_selection_with_fence(self) -> str | None:
+        """Return selected text optionally wrapped in ``` fences for source.*."""
+
         for region in self.view.sel():
-            if not region.empty():
-                return self.view.substr(region)
+            if region.empty():
+                continue
+
+            text = self.view.substr(region)
+
+            syntax = self.view.syntax()
+            if syntax and syntax.scope.startswith('source.'):
+                lang_token = syntax.name.split()[0].lower() if syntax.name else ''
+                fenced = f'```{lang_token}\n{text}\n```\n\n'
+                return fenced
+
+            return text
+
         return None
 
 
@@ -168,8 +188,9 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             sublime.status_message('prompt is empty')
             return
 
-        # Close the panel before sending to Codex.
+        # Close and destroy the input panel so it does not linger in the panel list.
         self.window.run_command('hide_panel')
+        self.window.destroy_output_panel(self.INPUT_PANEL_NAME)
 
         bridge = get_bridge(self.window)
         msg_id = str(uuid.uuid4())
