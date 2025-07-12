@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class CodexWindowEventListener(sublime_plugin.EventListener):
     """Clean up Codex bridges when their associated window is closed."""
 
-    def on_pre_close(self, view):  # type: ignore[override]
+    def on_pre_close(self, view: sublime.View):  # type: ignore[override]
         window = view.window()
 
         if window is None:
@@ -28,7 +28,7 @@ class CodexWindowEventListener(sublime_plugin.EventListener):
         # If this is the last view, the window is about to vanish – pre-empt.
         if len(window.views()) <= 1:
             key = window.id()
-            print('[CodexWindowEventListener] on_pre_close triggered for window', key)
+            logger.debug('on_pre_close triggered for window %i', key)
             bridge = bm.bridges.pop(key, None)
             if bridge is not None:
                 bridge.terminate()
@@ -46,7 +46,7 @@ def _watchdog_tick():
     for wid in stale_keys:
         bridge = bm.bridges.pop(wid, None)
         if bridge is not None:
-            print('[Codex] watchdog terminating orphaned bridge for window', wid)
+            logger.debug('Watchdog terminating orphaned bridge for window %s', wid)
             bridge.terminate()
 
     sublime.set_timeout(_watchdog_tick, 5_000)
@@ -60,7 +60,7 @@ def _cleanup_orphan_bridges():
     for wid in [wid for wid in list(bm.bridges) if wid not in live_window_ids and wid != '__global__']:
         bridge = bm.bridges.pop(wid, None)
         if bridge is not None:
-            logger.info('Immediate cleanup of orphaned bridge for window %s', wid)
+            logger.debug('Immediate cleanup of orphaned bridge for window %s', wid)
             bridge.terminate()
 
 
@@ -68,12 +68,12 @@ def _cleanup_orphan_bridges():
 
 
 def plugin_loaded():  # noqa: D401 – ST hook
-    print('[Codex] plugin_loaded – plugin is active')
+    logger.debug('plugin_loaded – plugin is active')
     _watchdog_tick()
 
 
 def plugin_unloaded():  # noqa: D401 - ST hook
-    print('[Codex] plugin_unloaded – cleaning up bridges')
+    logger.debug('plugin_unloaded – cleaning up bridges')
     for key, bridge in list(bm.bridges.items()):
         bridge.terminate()
         bm.bridges.pop(key, None)

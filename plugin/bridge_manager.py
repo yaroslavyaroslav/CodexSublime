@@ -7,12 +7,14 @@ separate and we don't spawn unnecessary background processes.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict
 
 import sublime  # type: ignore
 
 from .codex_bridge import _CodexBridge
 
+logger = logging.getLogger(__name__)
 __all__ = ['get_bridge', 'bridges']
 
 
@@ -29,9 +31,9 @@ def get_bridge(window: sublime.Window | None):  # type: ignore[name-defined]
         key = window.id()
 
     if key not in bridges:
-        print('[Codex] creating new bridge for window', key)
+        logger.debug('[Codex] creating new bridge for window %i', key)
         bridges[key] = _CodexBridge()
     else:
-        print('[Codex] reusing existing bridge for window', key)
+        logger.debug('[Codex] reusing existing bridge for window %i', key)
 
     return bridges[key]

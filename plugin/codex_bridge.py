@@ -10,6 +10,7 @@ resided in ``codex_sublime.py``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -19,7 +20,7 @@ from typing import Any, Dict, Optional
 
 import sublime
 
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 # Configuration ----------------------------------------------------------------
 
 # These defaults are temporary; in a later refactor they will be sourced from a
@@ -43,7 +44,7 @@ def kill_process_tree(root_pid: int) -> None:  # pragma: no cover — platform-s
     try:
         output = subprocess.check_output(['ps', '-o', 'pid=', '-o', 'ppid=', '-A'], text=True)
     except Exception as exc:  # noqa: BLE001 — broad but intentional; we merely log.
-        print('[CodexBridge] ps enumeration failed:', exc)
+        logger.error('ps enumeration failed: %s', exc)
         return
 
     children_map: dict[int, list[int]] = {}
@@ -107,7 +108,7 @@ class _CodexBridge:
                 'and expose it either in the environment or the plugin settings.'
             )
 
-        print('[CodexBridge] launching subprocess')
+        logger.debug('launching subprocess')
 
         env = os.environ.copy()
         env['OPENAI_API_KEY'] = OPENAI_API_KEY
@@ -164,7 +165,7 @@ class _CodexBridge:
                 self.proc.stdin.write(line)
                 self.proc.stdin.flush()
             except BrokenPipeError:
-                print('[CodexBridge] Broken pipe while sending data – process dead?')
+                logger.error('Broken pipe while sending data – process dead?')
                 return
 
         if cb:
@@ -179,7 +180,7 @@ class _CodexBridge:
 
         for line in self.proc.stdout:
             raw = line.rstrip()
-            print('[Codex raw]', raw)
+            logger.debug(raw)
 
             idx = raw.find('{')
             if idx < 0:
@@ -188,7 +189,7 @@ class _CodexBridge:
             try:
                 event: dict[str, Any] = json.loads(raw[idx:])
             except json.JSONDecodeError as exc:
-                print('[Codex parse error]', exc, raw[idx:])
+                logger.error('Parse error: %s %s', exc, raw[idx:])
                 continue
 
             call_id = event.get('id')
