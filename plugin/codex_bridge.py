@@ -22,6 +22,25 @@ import sublime
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Project-level settings helpers
+# ---------------------------------------------------------------------------
+
+
+def _project_settings() -> dict:  # noqa: D401 – helper
+    """Return the ``view.settings()['codex']`` mapping if available."""
+
+    try:
+        window = sublime.active_window()
+        view = window.active_view() if window else None
+        if view:
+            return view.settings().get('codex', {}) or {}
+    except Exception:  # noqa: BLE001 – may run in unit-tests
+        pass
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # Public helpers -------------------------------------------------------------
 
@@ -207,20 +226,33 @@ class _CodexBridge:
         folders = window.folders() if window else []
         cwd = folders[0] if folders else os.getcwd()
         cwd = os.path.abspath(cwd)
+        logger.debug('Codex cwd: %s', cwd)
+
+        conf = _project_settings()
+
+        extra_perms = conf.get('permissions', [])
+        if isinstance(extra_perms, str):
+            extra_perms = [extra_perms]
+
+        permissions = ['/private/tmp', '/opt/homebrew', cwd] + extra_perms
+
         self.send(
             {
                 'id': cfg_id,
                 'op': {
                     'type': 'configure_session',
-                    'model': 'o3',
-                    'approval_policy': 'unless-allow-listed',
+                    'model': conf.get('model', 'o3'),
+                    'approval_policy': conf.get('approval_policy', 'on-failure'),
                     'provider': {
-                        'name': 'openai',
-                        'base_url': 'https://api.openai.com/v1',
-                        'wire_api': 'responses',
-                        'env_key': 'OPENAI_API_KEY',
+                        'name': conf.get('provider_name', 'openai'),
+                        'base_url': conf.get('base_url', 'https://api.openai.com/v1'),
+                        'wire_api': conf.get('wire_api', 'responses'),
+                        'env_key': conf.get('env_key', 'OPENAI_API_KEY'),
                     },
-                    'sandbox_policy': {'permissions': [], 'mode': 'read-only'},
+                    'sandbox_policy': {
+                        'permissions': permissions,
+                        'mode': conf.get('sandbox_mode', 'read-only'),
+                    },
                     'cwd': cwd,
                 },
             },
