@@ -223,7 +223,7 @@ class _CodexBridge:
             try:
                 event: dict[str, Any] = json.loads(raw[idx:])
             except json.JSONDecodeError as exc:
-                logger.error('Parse error: %s %s', exc, raw[idx:])
+                logger.info('Parse error: %s %s', exc, raw[idx:])
                 continue
 
             call_id = event.get('id')
@@ -306,7 +306,14 @@ class _CodexBridge:
                         'env_key': conf.get('env_key', 'OPENAI_API_KEY'),
                     },
                     'sandbox_policy': {
-                        'permissions': permissions,
+                        # replace the whole "permissions": [...] block with ↓
+                        'permissions': [
+                            'disk-write-cwd',  # your repo
+                            'disk-write-platform-global-temp-folder',  #  /tmp ➜ /private/tmp
+                            'disk-write-platform-user-temp-folder',  #  /var/folders/…  (= $TMPDIR)
+                            {'disk-write-folder': {'folder': '~/.cache'}},  # clang ModuleCache
+                            {'disk-write-folder': {'folder': '~/Library/Developer/Xcode/DerivedData'}},
+                        ],
                         'mode': conf.get('sandbox_mode', 'read-only'),
                     },
                     'cwd': cwd,
