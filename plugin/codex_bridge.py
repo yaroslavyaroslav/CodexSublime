@@ -16,6 +16,7 @@ import signal
 import subprocess
 import threading
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import sublime
@@ -292,6 +293,8 @@ class _CodexBridge:
         # negligible.
         permissions = ['/private/tmp', cwd] + self._project_folders + extra_perms
 
+        home = Path.home()
+
         self.send(
             {
                 'id': cfg_id,
@@ -308,13 +311,13 @@ class _CodexBridge:
                     'sandbox_policy': {
                         # replace the whole "permissions": [...] block with ↓
                         'permissions': [
+                            'disk-full-read-access',
                             'disk-write-cwd',  # your repo
-                            'disk-write-platform-global-temp-folder',  #  /tmp ➜ /private/tmp
-                            'disk-write-platform-user-temp-folder',  #  /var/folders/…  (= $TMPDIR)
-                            {'disk-write-folder': {'folder': '~/.cache'}},  # clang ModuleCache
-                            {'disk-write-folder': {'folder': '~/Library/Developer/Xcode/DerivedData'}},
+                            'disk-write-platform-global-temp-folder',  # /private/tmp
+                            'disk-write-platform-user-temp-folder',  # /var/folders/…
+                            {'disk-write-folder': {'folder': f'{home}/.cache'}},  # clang ModuleCache
                         ],
-                        'mode': conf.get('sandbox_mode', 'read-only'),
+                        'mode': conf.get('sandbox_mode', 'workspace-write'),
                     },
                     'cwd': cwd,
                 },
