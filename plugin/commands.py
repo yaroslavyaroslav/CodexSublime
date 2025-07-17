@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import sublime  # type: ignore
@@ -9,6 +10,7 @@ import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
 
+logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Transcript view helpers
 # ---------------------------------------------------------------------------
@@ -52,7 +54,7 @@ def _extract_text(msg: dict) -> str | None:
     return None
 
 
-def _display_assistant_response(window: sublime.Window, prompt: str, event: dict) -> None:  # type: ignore[name-defined]
+def _display_assistant_response(window: sublime.Window, prompt: str, event: dict, session_id: str) -> None:  # type: ignore[name-defined]
     """Append the Codex *event* to output panel using markdown formatting."""
 
     target_view = _get_transcript_view(window)
@@ -81,6 +83,63 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
         body = f'```bash\n{cmd_str}\n```\n\n'
+
+    # ------------------------------------------------------------------
+    # "Run process?" approval request -------------------------------------------------
+    # ------------------------------------------------------------------
+
+    elif msg_type == 'exec_approval_request':
+        # Display the command that requests approval and immediately open a
+        # quick-panel so the user can choose how to proceed.  We *must* reply
+        # to the Codex backend, otherwise it will keep waiting for ever.
+
+        header = '### exec_approval\n\n'
+
+        cmd_list = msg.get('command', [])
+        cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
+        body = f'```bash\n{cmd_str}\n```\n\n'
+
+        # Offer the same five options the Codex CLI exposes in interactive
+        # mode so the Sublime UX mirrors the terminal behaviour.
+        quick_panel_items = [
+            ['Yes', 'Run this command once'],
+            ['Always Yes', 'Always allow this exact command without asking'],
+            ['No', 'Reject the command'],
+            ['Abort Execution', 'Stop session completely'],
+        ]
+
+        def _on_done(index: int, *, _window=window, _event=event):  # noqa: D401 – callback
+            # Map the selected quick-panel index to the corresponding choice
+            # understood by the CLI.  If the user aborted the panel (index
+            # == -1) we treat it as an explicit *no*.
+
+            choice_map = {
+                0: 'approved',
+                1: 'approved_for_session',
+                2: 'denied',
+                3: 'abort',
+                -1: 'denied',
+            }
+
+            decision = choice_map.get(index, 'denied')
+            logger.debug('call id for approval: %s', _event.get('id', 'wrong_id'))
+            # Send the approval response back to the Codex bridge so the
+            # conversation can continue.
+            bridge = get_bridge(_window)
+            bridge.send(
+                {
+                    'id': session_id,  # keep the same conversation id
+                    'op': {
+                        'id': _event.get('id'),  # keep the same conversation id
+                        'type': 'exec_approval',
+                        'decision': decision,
+                    },
+                },
+            )
+
+        # Show the quick-panel *after* we appended the request to the
+        # transcript so both happen in a single UI update.
+        window.show_quick_panel(quick_panel_items, _on_done)
 
     elif msg_type == 'exec_command_end':
         header = ''
@@ -198,6 +257,12 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
         self.window.destroy_output_panel(self.INPUT_PANEL_NAME)
 
         bridge = get_bridge(self.window)
+        project_data = self.window.project_data()
+        settings_block = project_data.get('settings') or {}
+        codex_cfg = settings_block.get('codex') or {}
+        session_id: str = None  # type: ignore
+        if 'session_id' in codex_cfg:
+            session_id = codex_cfg['session_id']
         msg_id = str(uuid.uuid4())
 
         bridge.send(
@@ -208,7 +273,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
                     'items': [{'type': 'text', 'text': prompt}],
                 },
             },
-            cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event),
+            cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event, session_id),
         )
 
         # Show the user's prompt immediately.
@@ -221,6 +286,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
                     'text': prompt,
                 }
             },
+            session_id,
         )
 
 
