@@ -1,0 +1,10 @@
+[
+    {
+        "keys": ["super+enter"],
+        "command": "codex_submit_input_panel",
+        "context": [
+            { "key": "panel_has_focus" },
+            { "key": "panel", "operand": "output.codex_input" }
+        ]
+    }
+]
