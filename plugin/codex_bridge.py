@@ -300,7 +300,7 @@ class _CodexBridge:
                 'id': cfg_id,
                 'op': {
                     'type': 'configure_session',
-                    'model': conf.get('model', 'o3'),
+                    'model': conf.get('model', 'codex-mini-latest'),
                     'approval_policy': conf.get('approval_policy', 'on-failure'),
                     'provider': {
                         'name': conf.get('provider_name', 'openai'),
