@@ -1,6 +1,6 @@
 # Codex Sublime Text plug-in
 
-Chat with the [Codex CLI](https://www.npmjs.com/package/codex) directly from Sublime Text.
+Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
 The plug-in spins up a `codex proto` subprocess, shows the conversation in a
 Markdown panel and lets you execute three simple commands from the Command
 Palette.
@@ -131,7 +131,7 @@ The first thing the bridge does is send a `configure_session` message:
         "type": "configure_session",
 
         // model / provider
-        "model":            "o3",
+        "model":            "codex-mini-latest",
         "approval_policy":  "on-failure",
         "provider": {
             "name":     "openai",
@@ -143,12 +143,15 @@ The first thing the bridge does is send a `configure_session` message:
         // sandbox
         "sandbox_policy": {
             "permissions": [
-                "/private/tmp",
-                "<cwd>",
-                "<each project folder>",
-                "<any extra permission>"
+                "disk-full-read-access",
+                "disk-write-cwd",
+                "disk-write-platform-global-temp-folder",
+                "disk-write-platform-user-temp-folder",
+                {
+                    "disk-write-folder": {"folder": "$HOME/.cache"} // for clangd cache
+                }
             ],
-            "mode": "read-only"
+            "mode": "workspace-write"
         },
 
         "cwd": "<cwd>"
