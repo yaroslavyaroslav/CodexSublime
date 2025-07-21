@@ -7,6 +7,20 @@ Palette.
 
 ---
 
+## Features
+
+- Full Codex capabilities
+    - Assistant-to-Bash interaction
+    - Sandboxing (on macOS and Linux)
+    - Model and provider selection
+- MCP support (via `~/.codex/config.toml`)[^1]
+- Deep Sublime Text integration
+    - Multiline input field uses Markdown
+    - Selected text is auto-copied into the message with syntax applied
+    - Outputs to either the output panel or a separate tab
+    - Symbol list included in answers
+- Works out of the box[^2].
+
 ## Installation
 
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
@@ -145,3 +159,6 @@ The first thing the bridge does is send a `configure_session` message:
 All values can be overridden per-project as shown above.
 
 Enjoy hacking with Codex inside Sublime Text!  🚀
+
+[^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
+[^2]: If both requirements are met (1) `codex@native` is installed and (2) token in settings is provided.
