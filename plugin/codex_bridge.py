@@ -291,15 +291,31 @@ class _CodexBridge:
         # not attempt to de-duplicate entries – the underlying sandbox logic
         # typically handles that, and the cost of a few duplicates is
         # negligible.
-        permissions = ['/private/tmp', cwd] + self._project_folders + extra_perms
 
-        home = Path.home()
+        permissions: list[str] = ['/private/tmp', cwd] + self._project_folders + extra_perms  # type: ignore[var-annotated]
+
+        # Translate paths → sandbox permission objects understood by Codex.
+
+        permissions_payload: list[dict | str] = [
+            'disk-full-read-access',
+            'disk-write-cwd',
+            'disk-write-platform-global-temp-folder',
+            'disk-write-platform-user-temp-folder',
+        ]
+
+        # Append one permission object per additional writable folder.
+        for p in permissions:
+            permissions_payload.append({'disk-write-folder': {'folder': p}})
+
+        # Additional convenience: allow writes to the user's clang module-cache.
+        permissions_payload.append({'disk-write-folder': {'folder': f'{Path.home()}/.cache'}})
 
         self.send(
             {
                 'id': cfg_id,
                 'op': {
                     'type': 'configure_session',
+                    # Model / provider settings.
                     'model': conf.get('model', 'codex-mini-latest'),
                     'approval_policy': conf.get('approval_policy', 'on-failure'),
                     'provider': {
@@ -308,17 +324,12 @@ class _CodexBridge:
                         'wire_api': conf.get('wire_api', 'responses'),
                         'env_key': conf.get('env_key', 'OPENAI_API_KEY'),
                     },
+                    # Sandboxing
                     'sandbox_policy': {
-                        # replace the whole "permissions": [...] block with ↓
-                        'permissions': [
-                            'disk-full-read-access',
-                            'disk-write-cwd',  # your repo
-                            'disk-write-platform-global-temp-folder',  # /private/tmp
-                            'disk-write-platform-user-temp-folder',  # /var/folders/…
-                            {'disk-write-folder': {'folder': f'{home}/.cache'}},  # clang ModuleCache
-                        ],
+                        'permissions': permissions_payload,
                         'mode': conf.get('sandbox_mode', 'workspace-write'),
                     },
+                    # Current working directory for the session.
                     'cwd': cwd,
                 },
             },
