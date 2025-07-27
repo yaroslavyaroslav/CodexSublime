@@ -7,6 +7,8 @@ Palette.
 
 ---
 
+![](static/codex_title.png)
+
 ## Features
 
 - Full Codex capabilities
@@ -35,9 +37,15 @@ Palette.
 
    If yours lives somewhere else, set the `codex_path` setting (see below).
 
-2. **Copy the plug-in into Sublime Text** (e.g. clone this repo into
-   `Packages/User/CodexSublime/`).  Or package-control-install once it is on the
-   registry.
+2. Plugin installation
+    1. With Package Control
+        1. `Package Control: Add Repository` → `https://github.com/yaroslavyaroslav/CodexSublime`  
+        2. `Package Control: Install Package` → **Codex**
+
+    2. Manual
+        Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
+
+That’s it – no settings file required.
 
 3. **Create an OpenAI token** and tell the plug-in about it.
 
