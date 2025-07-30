@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
@@ -157,6 +158,96 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
         if output_text:
             body += f'`{label}`:\n```\n{output_text}\n```\n\n'
+
+    # ------------------------------------------------------------------
+    # MCP tool-call wrappers -------------------------------------------
+    # ------------------------------------------------------------------
+
+    elif msg_type == 'mcp_tool_call_begin':
+        # Display information about the tool invocation in a concise form.
+        header = '### Tool call\n\n'
+
+        server = msg.get('server', '')
+        tool = msg.get('tool', '')
+        call_id = msg.get('call_id', '')
+        arguments = msg.get('arguments', {})
+
+        args_json = json.dumps(arguments, indent=2) if arguments else '{}'
+
+        body = (
+            f'`server`: `{server}`  \n'
+            f'`tool`: `{tool}`  \n'
+            f'`call_id`: `{call_id}`\n\n'
+            f'```json\n{args_json}\n```\n\n'
+        )
+
+    elif msg_type == 'mcp_tool_call_end':
+        header = ''  # keep output compact – this follows command_end style.
+
+        result = msg.get('result', {})
+
+        if 'Ok' in result:
+            ok_payload = result['Ok']
+
+            # DuckDuckGo and other servers often return a list of content
+            # items.  Extract plain-text segments so the transcript remains
+            # readable without overwhelming markdown formatting.
+            content_items = ok_payload.get('content', []) if isinstance(ok_payload, dict) else []
+
+            if content_items and isinstance(content_items, list):
+                texts = [c.get('text', '') for c in content_items if isinstance(c, dict)]
+                result_text = '\n'.join(texts).strip()
+            else:
+                # Fallback: pretty-print JSON for any other payload.
+                result_text = json.dumps(ok_payload, indent=2)
+
+            body = f'```\n{result_text}\n```\n\n'
+
+        elif 'Err' in result:
+            err_payload = result['Err']
+            body = f'`Error`: {err_payload}\n\n'
+        else:
+            # Unexpected shape – show raw result.
+            body = f'```json\n{json.dumps(result, indent=2)}\n```\n\n'
+
+    # ------------------------------------------------------------------
+    # apply_patch wrapper events ---------------------------------------
+    # ------------------------------------------------------------------
+
+    elif msg_type == 'patch_apply_begin':
+        header = '### Applying patch\n\n'
+
+        auto_approved = msg.get('auto_approved', False)
+        body = f'`auto_approved`: {auto_approved}\n\n'
+
+        changes = msg.get('changes', {})
+        if isinstance(changes, dict):
+            for file_path, change_info in changes.items():
+                # Determine operation type.
+                op_type = next(iter(change_info.keys()), '') if isinstance(change_info, dict) else ''
+                body += f'**{file_path}** ({op_type})\n'
+
+                diff_payload = change_info.get(op_type, {}) if isinstance(change_info, dict) else {}
+                unified_diff = diff_payload.get('unified_diff') if isinstance(diff_payload, dict) else None
+
+                if unified_diff:
+                    # Wrap diff in a code block so it renders nicely in Markdown.
+                    body += f'```diff\n{unified_diff}\n```\n\n'
+
+    elif msg_type == 'patch_apply_end':
+        header = ''
+
+        success = msg.get('success', False)
+        stdout = msg.get('stdout', '')
+        stderr = msg.get('stderr', '')
+
+        body = f'`success`: {success}\n\n'
+
+        if stdout:
+            body += f'```\n{stdout}\n```\n\n'
+
+        if stderr:
+            body += f'`stderr`:\n```\n{stderr}\n```\n\n'
 
     else:
         header = (
