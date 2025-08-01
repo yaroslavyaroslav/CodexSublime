@@ -15,15 +15,15 @@
         "caption": "Preferences: Codex Settings",
         "command": "edit_settings",
         "args": {
-            "base_file": "${packages}/CodexSublime/Codex.sublime-settings",
-            "default": "// Settings in here override those in \"CodexSublime/Codex.sublime-settings\"\n{\n\t$0\n}\n"
+            "base_file": "${packages}/Codex/Codex.sublime-settings",
+            "default": "// Settings in here override those in \"Codex/Codex.sublime-settings\"\n{\n\t$0\n}\n"
         }
     },
     {
         "caption": "Preferences: Codex Key Bindings",
         "command": "edit_settings",
         "args": {
-            "base_file": "${packages}/CodexSublime/Default.sublime-keymap",
+            "base_file": "${packages}/Codex/Default.sublime-keymap",
             "user_file": "${packages}/User/Default ($platform).sublime-keymap",
             "default": "[\n\t$0\n]\n"
         }
