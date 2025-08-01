@@ -16,7 +16,7 @@
                                 "caption": "Settings",
                                 "command": "edit_settings",
                                 "args": {
-                                    "base_file": "${packages}/CodexSublime/Codex.sublime-settings",
+                                    "base_file": "${packages}/Codex/Codex.sublime-settings",
                                     "default": "// Settings in here override those in \"Codex/Codex.sublime-settings\"\n{\n\t\"token\": \"$0\"\n}\n"
                                 }
                             },
