@@ -28,7 +28,7 @@ Palette.
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
 
    ```bash
-   npm i -g @openai/codex@native   # or any recent version that supports `proto`
+   npm i -g @openai/codex   # or any recent version that supports `proto`
    ```
 
    By default the plug-in looks for the binary at:
