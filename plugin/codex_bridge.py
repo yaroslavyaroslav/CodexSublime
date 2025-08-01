@@ -264,6 +264,29 @@ class _CodexBridge:
             msg = event.get('msg', {})
             msg_type = msg.get('type')
 
+            # --------------------------------------------------------
+            # Per-project event suppression ---------------------------------
+            # --------------------------------------------------------
+
+            # Combine global plug-in settings with (optional) project-specific
+            # overrides.  If the current project explicitly defines the
+            # `suppress_events` key we *only* use that value – an empty array
+            # means “do not suppress anything”.  Otherwise we fall back to the
+            # global default from *Codex.sublime-settings*.
+
+            project_conf = _project_settings()
+
+            if 'suppress_events' in project_conf:
+                suppress = project_conf.get('suppress_events', [])
+            else:
+                suppress = sublime.load_settings('Codex.sublime-settings').get('suppress_events', [])
+
+            if isinstance(suppress, str):
+                suppress = [suppress]
+
+            if msg_type in suppress:
+                continue  # skip noisy interim updates entirely
+
             if call_id in self._callbacks:
                 cb = self._callbacks[call_id]
                 if msg_type in ('assistant_message', 'agent_message'):

@@ -48,6 +48,19 @@ Windows where you might want to launch through WSL:
 }
 ```
 
+Suppressing noisy events
+-----------------------
+
+If the Codex backend floods the transcript with incremental updates such as
+`agent_reasoning_delta`, add them to the `suppress_events` array in your
+project-specific `codex` settings:
+
+```jsonc
+{
+  "suppress_events": ["agent_reasoning_delta"]
+}
+```
+
 2. Plugin installation
     1. With Package Control
         1. `Package Control: Add Repository` → `https://github.com/yaroslavyaroslav/CodexSublime`  

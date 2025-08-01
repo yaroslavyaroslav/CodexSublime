@@ -4,4 +4,8 @@
     // will be split on whitespace similar to a shell invocation.
     "codex_path": "/opt/homebrew/bin/codex",
     "token": "<your-token>",
+
+    // Suppress noisy or uninteresting event types from the transcript.
+    // Example: ["agent_reasoning_delta"]
+    "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "token_count"],
 }
