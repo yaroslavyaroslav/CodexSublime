@@ -1,11 +1,13 @@
 # Codex Sublime Text plug-in
 
-Chat with the [Codex CLI](https://www.npmjs.com/package/codex) directly from Sublime Text.
+Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
 The plug-in spins up a `codex proto` subprocess, shows the conversation in a
 Markdown panel and lets you execute three simple commands from the Command
 Palette.
 
 ---
+
+![](static/codex_title.png)
 
 ## Features
 
@@ -26,7 +28,7 @@ Palette.
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
 
    ```bash
-   npm i -g @openai/codex@native   # or any recent version that supports `proto`
+   npm i -g @openai/codex   # or any recent version that supports `proto`
    ```
 
    By default the plug-in looks for the binary at:
@@ -35,9 +37,15 @@ Palette.
 
    If yours lives somewhere else, set the `codex_path` setting (see below).
 
-2. **Copy the plug-in into Sublime Text** (e.g. clone this repo into
-   `Packages/User/CodexSublime/`).  Or package-control-install once it is on the
-   registry.
+2. Plugin installation
+    1. With Package Control
+        1. `Package Control: Add Repository` → `https://github.com/yaroslavyaroslav/CodexSublime`  
+        2. `Package Control: Install Package` → **Codex**
+
+    2. Manual
+        Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
+
+That’s it – no settings file required.
 
 3. **Create an OpenAI token** and tell the plug-in about it.
 
@@ -131,7 +139,7 @@ The first thing the bridge does is send a `configure_session` message:
         "type": "configure_session",
 
         // model / provider
-        "model":            "o3",
+        "model":            "codex-mini-latest",
         "approval_policy":  "on-failure",
         "provider": {
             "name":     "openai",
@@ -143,12 +151,15 @@ The first thing the bridge does is send a `configure_session` message:
         // sandbox
         "sandbox_policy": {
             "permissions": [
-                "/private/tmp",
-                "<cwd>",
-                "<each project folder>",
-                "<any extra permission>"
+                "disk-full-read-access",
+                "disk-write-cwd",
+                "disk-write-platform-global-temp-folder",
+                "disk-write-platform-user-temp-folder",
+                {
+                    "disk-write-folder": {"folder": "$HOME/.cache"} // for clangd cache
+                }
             ],
-            "mode": "read-only"
+            "mode": "workspace-write"
         },
 
         "cwd": "<cwd>"
