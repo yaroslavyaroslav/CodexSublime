@@ -35,7 +35,18 @@ Palette.
 
    * macOS (Homebrew): `/opt/homebrew/bin/codex`
 
-   If yours lives somewhere else, set the `codex_path` setting (see below).
+If yours lives somewhere else, set the `codex_path` setting (see below).  From
+vX.Y on, `codex_path` can also be an *array* of command tokens – handy on
+Windows where you might want to launch through WSL:
+
+```jsonc
+// "Codex (Windows).sublime-settings" – Sublime Text will automatically pick
+// the platform-specific default when you open *Preferences ▸ Package Settings ▸ Codex ▸ Settings* on Windows.
+{
+  "codex_path": ["wsl", "-e", "codex"],
+  "token": "sk-..."
+}
+```
 
 2. Plugin installation
     1. With Package Control

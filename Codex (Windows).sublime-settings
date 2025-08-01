@@ -1,0 +1,12 @@
+{
+    // Example configuration for Windows users.
+
+    // If you run Codex inside WSL, keep this setting as-is.  This launches
+    //   wsl -e codex proto
+    // transparently in the background (no console window will appear).
+    "codex_path": ["wsl", "-e", "codex"],
+
+    // Replace with your own key obtained from https://platform.openai.com/.
+    "token": "<your-token>"
+}
+

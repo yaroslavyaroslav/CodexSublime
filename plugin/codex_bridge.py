@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import signal
 import subprocess
 import threading
@@ -146,14 +147,46 @@ class _CodexBridge:
             'bufsize': 1,
             'env': env,
             'cwd': self._cwd,
-            'start_new_session': True,  # separate process-group leader
+            'start_new_session': True,  # separate process-group leader (POSIX)
         }
 
-        codex_bin: str = settings.get('codex_path', '/opt/homebrew/bin/codex')  # type: ignore[arg-type]
-        self.proc = subprocess.Popen(
-            [codex_bin, 'proto'],
-            **popen_kwargs,
-        )
+        # On Windows we explicitly hide the console window that would otherwise
+        # briefly flash up when spawning the *codex* subprocess.  We cannot set
+        # these flags unconditionally because they are Windows-specific.
+        if os.name == 'nt':  # pragma: no cover – Windows-only branch
+            startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+            popen_kwargs['startupinfo'] = startupinfo
+
+            # CREATE_NO_WINDOW avoids creating a new console window – only
+            # available on Windows.
+            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+
+        # -----------------------------------------------------------------
+        # Determine the *codex* invocation.
+        #
+        # Historically the "codex_path" setting was a **string** that pointed
+        # directly at the executable, e.g. "/usr/local/bin/codex".  For full
+        # Windows / WSL support we now also allow a *sequence* so that users
+        # can specify complex launchers such as ["wsl", "-e", "codex"].  To
+        # preserve backwards-compatibility we also accept a plain string and
+        # fall back to ``shlex.split`` to turn it into tokens.
+        # -----------------------------------------------------------------
+
+        raw_cmd = settings.get('codex_path', '/opt/homebrew/bin/codex')  # type: ignore[arg-type]
+
+        if isinstance(raw_cmd, str):
+            cmd: list[str] = shlex.split(raw_cmd)
+        elif isinstance(raw_cmd, (list, tuple)):
+            # Be lenient: convert tuples etc. to list for downstream mutation.
+            cmd = list(raw_cmd)
+        else:  # pragma: no cover – invalid type guarded at runtime
+            raise TypeError('codex_path must be str or list[str]')
+
+        # Append the mandatory "proto" sub-command expected by the Codex CLI.
+        cmd.append('proto')
+
+        self.proc = subprocess.Popen(cmd, **popen_kwargs)
 
         self._lock = threading.Lock()
         self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}

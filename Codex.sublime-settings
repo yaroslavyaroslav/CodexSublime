@@ -1,4 +1,7 @@
 {
+    // "codex_path" now also accepts a list for complex launchers (e.g. WSL on
+    // Windows: ["wsl", "-e", "codex"]).  A plain string continues to work and
+    // will be split on whitespace similar to a shell invocation.
     "codex_path": "/opt/homebrew/bin/codex",
     "token": "<your-token>",
 }
