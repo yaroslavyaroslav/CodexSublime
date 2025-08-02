@@ -196,4 +196,4 @@ All values can be overridden per-project as shown above.
 Enjoy hacking with Codex inside Sublime Text!  🚀
 
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
-[^2]: If both requirements are met (1) `codex@native` is installed and (2) token in settings is provided.
+[^2]: If both requirements are met (1) `codex` is installed and (2) token in settings is provided.
