@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+import os
 
 import sublime  # type: ignore
 import sublime_plugin  # type: ignore
@@ -305,24 +306,49 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
         window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
         window.focus_view(panel)
 
+        # Ensure the panel is scrolled to the very end so the caret is visible
+        # even if we pre-filled a long selection.
+        panel.show(panel.size())
+
     # ---------------------------------------------------------------------
 
     def _collect_selection_with_fence(self) -> str | None:
-        """Return selected text optionally wrapped in ``` fences for source.*."""
+        """Return selected text (first region) prefixed with the file path and
+        optionally wrapped in Markdown code fences when the selection comes
+        from a *source.* syntax view.
+        """
 
         for region in self.view.sel():
             if region.empty():
                 continue
 
-            text = self.view.substr(region)
+            selected = self.view.substr(region)
+
+            # Determine a useful path representation (relative to the first
+            # project folder if possible, otherwise absolute).
+            path_header = ''
+            file_path = self.view.file_name()
+            if file_path:
+                window = self.view.window()
+                if window:
+                    folders = window.folders()
+                    if folders:
+                        try:
+                            rel = os.path.relpath(file_path, folders[0])
+                            file_path = rel  # less noisy than absolute
+                        except ValueError:
+                            pass  # keep absolute path if relpath fails
+
+                path_header = f'**{file_path}**\n\n'
 
             syntax = self.view.syntax()
             if syntax and syntax.scope.startswith('source.'):
                 lang_token = syntax.name.split()[0].lower() if syntax.name else ''
-                fenced = f'```{lang_token}\n{text}\n```\n\n'
-                return fenced
+                body = f'```{lang_token}\n{selected}\n```\n\n'
+            else:
+                body = f'```\n{selected}\n```\n\n'
 
-            return text
+            return path_header + body
 
         return None
 

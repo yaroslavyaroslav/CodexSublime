@@ -48,11 +48,41 @@ def _project_settings() -> dict:  # noqa: D401 – helper
 
 
 def kill_process_tree(root_pid: int) -> None:  # pragma: no cover — platform-specific
-    """Best-effort recursive *SIGKILL* ``root_pid`` and all descendants (POSIX).
+    """Best-effort helper to terminate *root_pid* and all descendants.
 
-    On macOS / Linux we rely on ``ps`` because ``psutil`` might not be
-    available inside Sublime's bundled Python.
+    • On Windows we use the built-in *taskkill* utility (``/T``) which handles
+      the whole tree in one go.
+    • On POSIX systems we fall back to *ps* + manual traversal because
+      ``psutil`` is not guaranteed to be available within Sublime’s Python.
     """
+
+    # On Windows we fall back to the built-in *taskkill* utility which can
+    # terminate a process tree in one go (``/T`` flag).  We purposely ignore
+    # all output and errors – if *taskkill* is not available or fails we just
+    # return.
+
+    if os.name == 'nt':  # pragma: no cover – executed only on Windows
+        try:
+            # Hide the console window that *taskkill* would otherwise open.
+            startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+
+            subprocess.Popen(
+                [
+                    'taskkill',
+                    '/PID',
+                    str(root_pid),
+                    '/T',  # kill process tree
+                    '/F',  # force
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+            ).communicate()
+        except Exception as exc:  # noqa: BLE001 – best effort
+            logger.debug('taskkill failed: %s', exc)
+        return
 
     try:
         output = subprocess.check_output(['ps', '-o', 'pid=', '-o', 'ppid=', '-A'], text=True)
