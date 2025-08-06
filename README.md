@@ -195,5 +195,12 @@ All values can be overridden per-project as shown above.
 
 Enjoy hacking with Codex inside Sublime Text!  🚀
 
+## Code sent to the language model
+
+The plugin only sends the code snippets that you explicitly type or select in the input panel to the language model. It never uploads your entire file, buffer, or project automatically. Local configuration (such as sandbox permissions or project folders) is used only by the CLI to enforce file I/O rules and is not included in the prompt context.
+
+However keep in mind that since this plugin and tool it relays on is agentish, any data from within your sandbox area could be sent to a server.
+
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
 [^2]: If both requirements are met (1) `codex` is installed and (2) token in settings is provided.
+
