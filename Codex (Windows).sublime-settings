@@ -1,13 +1,38 @@
 {
     // Example configuration for Windows users.
 
-    // If you run Codex inside WSL, keep this setting as-is.  This launches
+    // If you run Codex inside WSL, keep this setting as-is. This launches:
     //   wsl -e codex proto
     // transparently in the background (no console window will appear).
+    // For native Windows installation, you can use e.g.:
+    //   "codex_path": "codex.exe"
     "codex_path": ["wsl", "-e", "codex"],
 
     // Replace with your own key obtained from https://platform.openai.com/.
+    // The plugin exports this token into the process environment variable
+    // specified by "env_key" (default: OPENAI_API_KEY).
     "token": "<your-token>",
+
+    // Provider configuration (can be overridden per-project in .sublime-project → settings.codex)
+    "model": "gpt-5",
+    "provider_name": "openai",
+    "base_url": "https://api.openai.com/v1",
+    // Wire protocol used to talk to the provider (e.g. "responses").
+    "wire_api": "responses",
+    // Environment variable name that contains the API key (exported for the CLI).
+    "env_key": "OPENAI_API_KEY",
+
+    // Reasoning configuration (project-level values take precedence)
+    "model_reasoning_effort": "medium",   // low | medium | high
+    "model_reasoning_summary": "detail",  // concise | detail
+
+    // Session policy
+    "approval_policy": "on-failure", // on-failure | always | never
+
+    // Sandbox settings
+    "sandbox_mode": "workspace-write",
+    // Additional writable folders for the agent (besides project folders and temp dirs)
+    "permissions": [],
 
     // Hide verbose incremental updates that clutter the transcript.
     "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "token_count"]
