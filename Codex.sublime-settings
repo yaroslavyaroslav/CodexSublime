@@ -7,5 +7,5 @@
 
     // Suppress noisy or uninteresting event types from the transcript.
     // Example: ["agent_reasoning_delta"]
-    "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "token_count"],
+    "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "exec_command_output_delta", "token_count", "task_complete"],
 }
