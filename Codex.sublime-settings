@@ -1,11 +1,33 @@
 {
-    // "codex_path" now also accepts a list for complex launchers (e.g. WSL on
-    // Windows: ["wsl", "-e", "codex"]).  A plain string continues to work and
-    // will be split on whitespace similar to a shell invocation.
+    // Path to the Codex CLI. You can also specify a list for complex launchers,
+    // e.g. ["wsl", "-e", "codex"]. A plain string is split similar to a shell.
     "codex_path": "/opt/homebrew/bin/codex",
+
+    // Your provider API token used by the CLI (exported as OPENAI_API_KEY by default).
     "token": "<your-token>",
 
+    // Provider configuration (can be overridden per-project in .sublime-project → settings.codex)
+    "model": "gpt-5",
+    "provider_name": "openai",
+    "base_url": "https://api.openai.com/v1",
+    // Wire protocol used to talk to the provider (e.g. "responses").
+    "wire_api": "responses",
+    // Environment variable name that contains the API key (exported for the CLI).
+    "env_key": "OPENAI_API_KEY",
+
+    // Reasoning configuration (project-level values take precedence)
+    "model_reasoning_effort": "medium",   // low | medium | high
+    "model_reasoning_summary": "detail",  // concise | detail
+
+    // Session policy
+    "approval_policy": "on-failure", // on-failure | always | never
+
+    // Sandbox settings
+    "sandbox_mode": "workspace-write",
+    // Additional writable folders for the agent (besides project folders and temp dirs)
+    "permissions": [],
+
     // Suppress noisy or uninteresting event types from the transcript.
-    // Example: ["agent_reasoning_delta"]
-    "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "exec_command_output_delta", "token_count", "task_complete"],
+    // Example: ["agent_reasoning_delta"]. You can also specify a string.
+    "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "token_count", "exec_command_output_delta", "token_count", "task_complete"],
 }

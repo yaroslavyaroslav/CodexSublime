@@ -430,8 +430,20 @@ class _CodexBridge:
         base_url = conf.get('base_url') or global_settings.get('base_url') or 'https://api.openai.com/v1'
         wire_api = conf.get('wire_api') or global_settings.get('wire_api') or 'responses'
         env_key = conf.get('env_key') or global_settings.get('env_key') or 'OPENAI_API_KEY'
-        approval_policy = conf.get('approval_policy') or global_settings.get('approval_policy') or 'on-failure'
+        approval_policy = (
+            conf.get('approval_policy') or global_settings.get('approval_policy') or 'on-failure'
+        )
         sandbox_mode = conf.get('sandbox_mode') or global_settings.get('sandbox_mode') or 'workspace-write'
+
+        # Resolve reasoning configuration with project → global → default fallbacks.
+        reasoning_effort = (
+            conf.get('model_reasoning_effort') or global_settings.get('model_reasoning_effort') or 'medium'
+        )
+        reasoning_summary = (
+            conf.get('model_reasoning_summary')
+            or global_settings.get('model_reasoning_summary')
+            or 'detailed'
+        )
 
         op_payload = {
             'type': 'configure_session',
@@ -440,8 +452,8 @@ class _CodexBridge:
             'apply_to_self': True,
             # Model / provider settings.
             'model': model,
-            'model_reasoning_effort': 'medium',
-            'model_reasoning_summary': 'concise',
+            'model_reasoning_effort': reasoning_effort,
+            'model_reasoning_summary': reasoning_summary,
             'approval_policy': approval_policy,
             'provider': {
                 'name': provider_name,
