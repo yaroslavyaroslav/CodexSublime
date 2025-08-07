@@ -220,6 +220,11 @@ class _CodexBridge:
 
         self._lock = threading.Lock()
         self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}
+        # Fallback routing for active prompt: if the callback mapping gets
+        # cleared too early by upstream changes, we still deliver events for
+        # the most recent user_input so the UI is not left hanging.
+        self._last_msg_id: Optional[str] = None
+        self._last_cb: Optional[callable[[dict[str, Any]], None]] = None
 
         # Determine and (if possible) persist a *session_id* so that we can
         # resume the same chat after restarting Sublime Text (provided the
@@ -268,6 +273,13 @@ class _CodexBridge:
 
         if cb:
             self._callbacks[obj['id']] = cb
+            try:
+                op_type = obj.get('op', {}).get('type')
+            except Exception:
+                op_type = None
+            if op_type == 'user_input':
+                self._last_msg_id = obj['id']
+                self._last_cb = cb
 
     # -------------------------------------------------------------- internal --
 
@@ -317,12 +329,27 @@ class _CodexBridge:
             if msg_type in suppress:
                 continue  # skip noisy interim updates entirely
 
-            if call_id in self._callbacks:
-                cb = self._callbacks[call_id]
-                if msg_type in ('assistant_message', 'agent_message'):
-                    del self._callbacks[call_id]
+            dispatch_cb: Optional[callable[[dict[str, Any]], None]] = None
+            using_fallback = False
 
-                sublime.set_timeout(lambda _e=event, _c=cb: _c(_e), 0)
+            if call_id in self._callbacks:
+                dispatch_cb = self._callbacks[call_id]
+                # Keep callback active across agent_message events; clear on
+                # assistant_message or task_complete.
+                if msg_type in ('assistant_message', 'task_complete'):
+                    del self._callbacks[call_id]
+            elif self._last_msg_id and call_id == self._last_msg_id and self._last_cb:
+                # Fallback path – deliver even if mapping was cleared.
+                dispatch_cb = self._last_cb
+                using_fallback = True
+
+            if dispatch_cb is not None:
+                # If we've reached completion, clear fallback as well.
+                if msg_type in ('assistant_message', 'task_complete') and self._last_msg_id == call_id:
+                    self._last_msg_id = None
+                    self._last_cb = None
+
+                sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
 
     # ------------------------------------------------ session persistence --
 
@@ -367,6 +394,7 @@ class _CodexBridge:
         cwd = self._cwd
 
         conf = _project_settings()
+        global_settings = sublime.load_settings('Codex.sublime-settings')
 
         extra_perms = conf.get('permissions', [])
         if isinstance(extra_perms, str):
@@ -396,28 +424,46 @@ class _CodexBridge:
         # Additional convenience: allow writes to the user's clang module-cache.
         permissions_payload.append({'disk-write-folder': {'folder': f'{Path.home()}/.cache'}})
 
+        # Resolve model/provider from project settings first, then global plugin settings, then defaults.
+        model = conf.get('model') or global_settings.get('model') or 'gpt-5'
+        provider_name = conf.get('provider_name') or global_settings.get('provider_name') or 'openai'
+        base_url = conf.get('base_url') or global_settings.get('base_url') or 'https://api.openai.com/v1'
+        wire_api = conf.get('wire_api') or global_settings.get('wire_api') or 'responses'
+        env_key = conf.get('env_key') or global_settings.get('env_key') or 'OPENAI_API_KEY'
+        approval_policy = conf.get('approval_policy') or global_settings.get('approval_policy') or 'on-failure'
+        sandbox_mode = conf.get('sandbox_mode') or global_settings.get('sandbox_mode') or 'workspace-write'
+
+        op_payload = {
+            'type': 'configure_session',
+            # Explicitly target the current session and apply changes to this agent.
+            'session_id': cfg_id,
+            'apply_to_self': True,
+            # Model / provider settings.
+            'model': model,
+            'model_reasoning_effort': 'medium',
+            'model_reasoning_summary': 'concise',
+            'approval_policy': approval_policy,
+            'provider': {
+                'name': provider_name,
+                'base_url': base_url,
+                'wire_api': wire_api,
+                'env_key': env_key,
+            },
+            # Sandboxing
+            'sandbox_policy': {
+                'permissions': permissions_payload,
+                'mode': sandbox_mode,
+            },
+            # Current working directory for the session.
+            'cwd': cwd,
+        }
+
+        logger.debug('configure_session payload: %s', json.dumps(op_payload, sort_keys=True))
+
         self.send(
             {
                 'id': cfg_id,
-                'op': {
-                    'type': 'configure_session',
-                    # Model / provider settings.
-                    'model': conf.get('model', 'codex-mini-latest'),
-                    'approval_policy': conf.get('approval_policy', 'on-failure'),
-                    'provider': {
-                        'name': conf.get('provider_name', 'openai'),
-                        'base_url': conf.get('base_url', 'https://api.openai.com/v1'),
-                        'wire_api': conf.get('wire_api', 'responses'),
-                        'env_key': conf.get('env_key', 'OPENAI_API_KEY'),
-                    },
-                    # Sandboxing
-                    'sandbox_policy': {
-                        'permissions': permissions_payload,
-                        'mode': conf.get('sandbox_mode', 'workspace-write'),
-                    },
-                    # Current working directory for the session.
-                    'cwd': cwd,
-                },
+                'op': op_payload,
             },
             cb=None,
         )
