@@ -258,10 +258,23 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         if text:
             body = f'{text}\n\n'
 
+    # Determine whether the caret was at end before appending so we can
+    # preserve the reader's position unless they were following the tail.
+    will_follow_tail = False
+    if not is_panel:
+        try:
+            pre_size = target_view.size()
+            selections = list(target_view.sel())
+            will_follow_tail = any(r.empty() and r.end() == pre_size for r in selections)
+        except Exception:
+            # If anything goes wrong, default to current behaviour (follow tail).
+            will_follow_tail = True
+
     target_view.run_command('append', {'characters': header + body, 'force': True})
 
-    if not is_panel:
-        # Scroll to bottom in tab view.
+    if not is_panel and will_follow_tail:
+        # Only auto-scroll in the transcript tab when the caret was at the
+        # very end before we appended new content.
         target_view.show(target_view.size())
 
     # Restore read-only
