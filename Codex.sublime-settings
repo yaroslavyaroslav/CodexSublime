@@ -17,7 +17,7 @@
 
     // Reasoning configuration (project-level values take precedence)
     "model_reasoning_effort": "medium",   // low | medium | high
-    "model_reasoning_summary": "detail",  // concise | detail
+    "model_reasoning_summary": "detailed",  // concise | detailed
 
     // Session policy
     "approval_policy": "on-failure", // on-failure | always | never
@@ -29,5 +29,14 @@
 
     // Suppress noisy or uninteresting event types from the transcript.
     // Example: ["agent_reasoning_delta"]. You can also specify a string.
-    "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "token_count", "exec_command_output_delta", "token_count", "task_complete"],
+    "suppress_events": [
+        "agent_reasoning_delta",
+        "agent_reasoning_section_break",
+        "agent_message_delta",
+        "token_count",
+        "exec_command_output_delta",
+        "token_count",
+        "task_complete",
+        "turn_diff",
+    ],
 }
