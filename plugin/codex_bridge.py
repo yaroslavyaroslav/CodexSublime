@@ -208,12 +208,47 @@ class _CodexBridge:
         if isinstance(raw_cmd, str):
             cmd: list[str] = shlex.split(raw_cmd)
         elif isinstance(raw_cmd, (list, tuple)):
-            # Be lenient: convert tuples etc. to list for downstream mutation.
             cmd = list(raw_cmd)
         else:  # pragma: no cover – invalid type guarded at runtime
             raise TypeError('codex_path must be str or list[str]')
 
-        # Append the mandatory "proto" sub-command expected by the Codex CLI.
+        # Inject CLI config overrides so the spawned session matches
+        # project/global settings. Proto subcommand only forwards `-c` overrides.
+        conf = _project_settings()
+        global_settings = sublime.load_settings('Codex.sublime-settings')
+
+        # Model selection
+        model = conf.get('model') or global_settings.get('model')
+        if isinstance(model, str) and model:
+            cmd.extend(['-c', f'model={model}'])
+
+        # Sandbox + approval via overrides
+        sandbox_mode = conf.get('sandbox_mode') or global_settings.get('sandbox_mode')
+        if isinstance(sandbox_mode, str) and sandbox_mode:
+            cmd.extend(['-c', f'sandbox_mode={sandbox_mode}'])
+
+        approval_policy = conf.get('approval_policy') or global_settings.get('approval_policy')
+        if isinstance(approval_policy, str) and approval_policy:
+            cmd.extend(['-c', f'approval_policy={approval_policy}'])
+
+        # Network access for workspace-write
+        allow_network = conf.get('sandbox_network_access') or global_settings.get('sandbox_network_access')
+        if isinstance(allow_network, bool):
+            cmd.extend(['-c', f'sandbox_workspace_write.network_access={str(allow_network).lower()}'])
+
+        # Extra writable roots from `permissions` setting
+        extra_perms = conf.get('permissions', [])
+        if isinstance(extra_perms, str):
+            extra_perms = [extra_perms]
+        extra_perms = [os.path.abspath(p) for p in (extra_perms or []) if isinstance(p, str)]
+        # Avoid duplicating cwd; Config will include cwd by default in workspace-write
+        extra_perms = [p for p in extra_perms if os.path.abspath(p) != self._cwd]
+        if extra_perms:
+            # Build TOML array literal
+            quoted = ','.join(f'"{p}"' for p in extra_perms)
+            cmd.extend(['-c', f'sandbox_workspace_write.writable_roots=[{quoted}]'])
+
+        # Finally, run in JSON protocol mode.
         cmd.append('proto')
 
         self.proc = subprocess.Popen(cmd, **popen_kwargs)
@@ -234,8 +269,8 @@ class _CodexBridge:
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
-        # Do initial session configuration.
-        self._configure_session()
+        # Do not send legacy configure_session Op; Codex CLI handles initial
+        # configuration on spawn. Turn-level settings are sent with user_turn.
 
     # --------------------------------------------------------------------- API
 
@@ -386,96 +421,3 @@ class _CodexBridge:
             window.set_project_data(data)
 
         return session_id
-
-    # -------------------------------------------------------- configuration --
-
-    def _configure_session(self) -> None:
-        cfg_id = self._session_id  # stable across restarts in projects
-        cwd = self._cwd
-
-        conf = _project_settings()
-        global_settings = sublime.load_settings('Codex.sublime-settings')
-
-        extra_perms = conf.get('permissions', [])
-        if isinstance(extra_perms, str):
-            extra_perms = [extra_perms]
-
-        # Combine default sandbox roots with all project folders and any
-        # additional permissions specified by the user.  We purposefully do
-        # not attempt to de-duplicate entries – the underlying sandbox logic
-        # typically handles that, and the cost of a few duplicates is
-        # negligible.
-
-        permissions: list[str] = ['/private/tmp', cwd] + self._project_folders + extra_perms  # type: ignore[var-annotated]
-
-        # Translate paths → sandbox permission objects understood by Codex.
-
-        permissions_payload: list[dict | str] = [
-            'disk-full-read-access',
-            'disk-write-cwd',
-            'disk-write-platform-global-temp-folder',
-            'disk-write-platform-user-temp-folder',
-        ]
-
-        # Append one permission object per additional writable folder.
-        for p in permissions:
-            permissions_payload.append({'disk-write-folder': {'folder': p}})
-
-        # Additional convenience: allow writes to the user's clang module-cache.
-        permissions_payload.append({'disk-write-folder': {'folder': f'{Path.home()}/.cache'}})
-
-        # Resolve model/provider from project settings first, then global plugin settings, then defaults.
-        model = conf.get('model') or global_settings.get('model') or 'gpt-5'
-        provider_name = conf.get('provider_name') or global_settings.get('provider_name') or 'openai'
-        base_url = conf.get('base_url') or global_settings.get('base_url') or 'https://api.openai.com/v1'
-        wire_api = conf.get('wire_api') or global_settings.get('wire_api') or 'responses'
-        env_key = conf.get('env_key') or global_settings.get('env_key') or 'OPENAI_API_KEY'
-        approval_policy = (
-            conf.get('approval_policy') or global_settings.get('approval_policy') or 'on-failure'
-        )
-        sandbox_mode = conf.get('sandbox_mode') or global_settings.get('sandbox_mode') or 'workspace-write'
-
-        # Resolve reasoning configuration with project → global → default fallbacks.
-        reasoning_effort = (
-            conf.get('model_reasoning_effort') or global_settings.get('model_reasoning_effort') or 'medium'
-        )
-        reasoning_summary = (
-            conf.get('model_reasoning_summary')
-            or global_settings.get('model_reasoning_summary')
-            or 'detailed'
-        )
-
-        op_payload = {
-            'type': 'configure_session',
-            # Explicitly target the current session and apply changes to this agent.
-            'session_id': cfg_id,
-            'apply_to_self': True,
-            # Model / provider settings.
-            'model': model,
-            'model_reasoning_effort': reasoning_effort,
-            'model_reasoning_summary': reasoning_summary,
-            'approval_policy': approval_policy,
-            'provider': {
-                'name': provider_name,
-                'base_url': base_url,
-                'wire_api': wire_api,
-                'env_key': env_key,
-            },
-            # Sandboxing
-            'sandbox_policy': {
-                'permissions': permissions_payload,
-                'mode': sandbox_mode,
-            },
-            # Current working directory for the session.
-            'cwd': cwd,
-        }
-
-        logger.debug('configure_session payload: %s', json.dumps(op_payload, sort_keys=True))
-
-        self.send(
-            {
-                'id': cfg_id,
-                'op': op_payload,
-            },
-            cb=None,
-        )

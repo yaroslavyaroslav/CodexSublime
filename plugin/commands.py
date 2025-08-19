@@ -84,7 +84,14 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         header = '### Command call\n\n'
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
-        body = f'```bash\n{cmd_str}\n```\n\n'
+        cwd_line = ''
+        try:
+            cwd_val = msg.get('cwd')
+            if cwd_val:
+                cwd_line = f'`cwd`: `{cwd_val}`\n\n'
+        except Exception:
+            pass
+        body = cwd_line + f'```bash\n{cmd_str}\n```\n\n'
 
     # ------------------------------------------------------------------
     # "Run process?" approval request -------------------------------------------------
@@ -101,7 +108,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
         body = f'```bash\n{cmd_str}\n```\n\n'
 
-        # Offer the same five options the Codex CLI exposes in interactive
+        # Offer the same options the Codex CLI exposes in interactive
         # mode so the Sublime UX mirrors the terminal behaviour.
         quick_panel_items = [
             ['Yes', 'Run this command once'],
@@ -168,45 +175,158 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         # Display information about the tool invocation in a concise form.
         header = '### Tool call\n\n'
 
-        server = msg.get('server', '')
-        tool = msg.get('tool', '')
-        call_id = msg.get('call_id', '')
-        arguments = msg.get('arguments', {})
+        # Prefer the canonical Codex schema: `invocation.{server, tool, arguments}`
+        invocation = msg.get('invocation') if isinstance(msg.get('invocation'), dict) else None
 
-        args_json = json.dumps(arguments, indent=2) if arguments else '{}'
+        # Be liberal in what we accept – if `invocation` is absent, fall back
+        # to alternative shapes some servers may use.
+        raw_server = (invocation.get('server') if invocation else None) or msg.get('server')
+        if isinstance(raw_server, dict):
+            server = raw_server.get('name') or raw_server.get('id') or raw_server.get('identifier') or ''
+        else:
+            server = str(raw_server) if raw_server is not None else ''
 
-        body = (
-            f'`server`: `{server}`  \n'
-            f'`tool`: `{tool}`  \n'
-            f'`call_id`: `{call_id}`\n\n'
-            f'```json\n{args_json}\n```\n\n'
+        raw_tool = (invocation.get('tool') if invocation else None) or msg.get('tool')
+        if isinstance(raw_tool, dict):
+            tool = raw_tool.get('name') or raw_tool.get('id') or raw_tool.get('identifier') or ''
+        else:
+            tool = str(raw_tool) if raw_tool is not None else ''
+
+        # Additional fallbacks some servers may use.
+        if not server:
+            server = (
+                msg.get('server_name')
+                or msg.get('server_id')
+                or msg.get('server_identifier')
+                or ''
+            )
+        if not tool:
+            tool = (
+                msg.get('tool_name')
+                or msg.get('tool_id')
+                or msg.get('tool_identifier')
+                or ''
+            )
+
+        # Best-effort extraction of a method/function/procedure name used by
+        # the tool, and its arguments.  Different servers use different keys.
+        method = (
+            msg.get('method')
+            or msg.get('method_name')
+            or msg.get('procedure')
+            or msg.get('function')
+            or (invocation.get('method') if invocation else None)
+            or (raw_tool.get('method') if isinstance(raw_tool, dict) else None)
+            or ''
         )
+
+        call_id = msg.get('call_id', '')
+
+        # Gather arguments from canonical `invocation.arguments`, then common fallbacks.
+        arguments = (
+            (invocation.get('arguments') if invocation else None)
+            or msg.get('arguments')
+            or msg.get('args')
+            or msg.get('params')
+            or msg.get('parameters')
+            or msg.get('input')
+            or (raw_tool.get('arguments') if isinstance(raw_tool, dict) else None)
+            or {}
+        )
+
+        # Header lines
+        body = (
+            f'`server`: `{server}`  \n' if server else ''
+        )
+        body += f'`tool`: `{tool}`  \n' if tool else ''
+        # Only show `method` when it is explicitly provided and differs from `tool`.
+        try:
+            tool_cmp = (tool or '').strip().lower()
+            method_cmp = (method or '').strip().lower()
+        except Exception:
+            tool_cmp = str(tool)
+            method_cmp = str(method)
+
+        if method and method_cmp != tool_cmp:
+            body += f'`method`: `{method}`  \n'
+        body += f'`call_id`: `{call_id}`\n\n' if call_id else '\n'
+
+        # Always render an arguments block, even when empty, as requested.
+        try:
+            args_block = json.dumps(arguments, indent=2)
+        except Exception:
+            # Arguments might be a raw string; try to parse JSON-looking text.
+            try:
+                import ast  # local import to avoid top-level cost
+
+                if isinstance(arguments, str):
+                    stripped = arguments.strip()
+                    if stripped.startswith('{') or stripped.startswith('['):
+                        args_block = json.dumps(json.loads(stripped), indent=2)
+                    else:
+                        args_block = json.dumps({'value': arguments}, indent=2)
+                else:
+                    args_block = json.dumps({'value': str(arguments)}, indent=2)
+            except Exception:
+                args_block = json.dumps({'value': str(arguments)}, indent=2)
+
+        body += f'```json\n{args_block}\n```\n\n'
 
     elif msg_type == 'mcp_tool_call_end':
         header = ''  # keep output compact – this follows command_end style.
 
         result = msg.get('result', {})
 
+        def _looks_like_json(s: str) -> bool:
+            s = s.strip()
+            return (s.startswith('{') and s.endswith('}')) or (s.startswith('[') and s.endswith(']'))
+
         if 'Ok' in result:
             ok_payload = result['Ok']
 
-            # DuckDuckGo and other servers often return a list of content
-            # items.  Extract plain-text segments so the transcript remains
-            # readable without overwhelming markdown formatting.
-            content_items = ok_payload.get('content', []) if isinstance(ok_payload, dict) else []
+            display_json = None
+            display_text = None
 
-            if content_items and isinstance(content_items, list):
-                texts = [c.get('text', '') for c in content_items if isinstance(c, dict)]
-                result_text = '\n'.join(texts).strip()
+            if isinstance(ok_payload, dict):
+                # Prefer structured content if provided.
+                sc = ok_payload.get('structuredContent') or ok_payload.get('structured_content')
+                if isinstance(sc, dict) and 'result' in sc:
+                    display_json = sc['result']
+                else:
+                    content_items = ok_payload.get('content', [])
+                    if isinstance(content_items, list) and content_items:
+                        texts = [c.get('text', '') for c in content_items if isinstance(c, dict)]
+                        texts = [t for t in texts if t]
+                        if texts and all(_looks_like_json(t) for t in texts):
+                            # Aggregate JSON lines into an array for nicer formatting.
+                            try:
+                                parsed = [json.loads(t) for t in texts]
+                                display_json = parsed
+                            except Exception:
+                                display_text = '\n'.join(texts).strip()
+                        else:
+                            display_text = '\n'.join(texts).strip()
+                    else:
+                        # Fallback: pretty-print entire payload.
+                        display_json = ok_payload
             else:
-                # Fallback: pretty-print JSON for any other payload.
-                result_text = json.dumps(ok_payload, indent=2)
+                # Non-dict payload – show as text.
+                display_text = str(ok_payload)
 
-            body = f'```\n{result_text}\n```\n\n'
+            if display_json is not None:
+                body = f'```json\n{json.dumps(display_json, indent=2)}\n```\n\n'
+            elif display_text is not None:
+                body = f'```\n{display_text}\n```\n\n'
+            else:
+                body = '``````\n\n'  # unreachable but safe default
 
         elif 'Err' in result:
             err_payload = result['Err']
-            body = f'`Error`: {err_payload}\n\n'
+            # Render errors in a readable, consistent way.
+            try:
+                body = f'`Error`: {json.dumps(err_payload)}\n\n'
+            except Exception:
+                body = f'`Error`: {err_payload}\n\n'
         else:
             # Unexpected shape – show raw result.
             body = f'```json\n{json.dumps(result, indent=2)}\n```\n\n'
@@ -258,10 +378,23 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         if text:
             body = f'{text}\n\n'
 
+    # Determine whether the caret was at end before appending so we can
+    # preserve the reader's position unless they were following the tail.
+    will_follow_tail = False
+    if not is_panel:
+        try:
+            pre_size = target_view.size()
+            selections = list(target_view.sel())
+            will_follow_tail = any(r.empty() and r.end() == pre_size for r in selections)
+        except Exception:
+            # If anything goes wrong, default to current behaviour (follow tail).
+            will_follow_tail = True
+
     target_view.run_command('append', {'characters': header + body, 'force': True})
 
-    if not is_panel:
-        # Scroll to bottom in tab view.
+    if not is_panel and will_follow_tail:
+        # Only auto-scroll in the transcript tab when the caret was at the
+        # very end before we appended new content.
         target_view.show(target_view.size())
 
     # Restore read-only
@@ -374,13 +507,90 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
         self.window.destroy_output_panel(self.INPUT_PANEL_NAME)
 
         bridge = get_bridge(self.window)
-        project_data = self.window.project_data()
+        project_data = self.window.project_data() or {}
         settings_block = project_data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
         session_id: str = None  # type: ignore
         if 'session_id' in codex_cfg:
             session_id = codex_cfg['session_id']
         msg_id = str(uuid.uuid4())
+
+        # Determine cwd and sandbox/approval for this turn and use `user_turn`
+        # so the active turn inherits correct writable roots under Codex ≥0.22.
+        window = self.window
+        folders = window.folders() if window else []
+
+        # Prefer the project folder containing the active file as cwd.
+        active_file = None
+        try:
+            av = window.active_view() if window else None
+            active_file = av.file_name() if av else None
+        except Exception:
+            active_file = None
+
+        def _best_cwd(folders_list: list[str], active_path: str | None) -> str:
+            if active_path:
+                for folder in folders_list:
+                    try:
+                        ap = os.path.abspath(active_path)
+                        fp = os.path.abspath(folder)
+                        if ap.startswith(fp + os.sep) or ap == fp:
+                            return fp
+                    except Exception:
+                        continue
+            if folders_list:
+                return os.path.abspath(folders_list[0])
+            return os.path.abspath(os.getcwd())
+
+        cwd = _best_cwd(folders, active_file)
+
+        global_settings = sublime.load_settings('Codex.sublime-settings')
+        approval_policy = (
+            codex_cfg.get('approval_policy')
+            or global_settings.get('approval_policy')
+            or 'on-failure'
+        )
+
+        # Build sandbox_policy compatible with Codex protocol
+        sandbox_mode = codex_cfg.get('sandbox_mode') or global_settings.get('sandbox_mode') or 'workspace-write'
+        allow_network = bool(codex_cfg.get('sandbox_network_access') or global_settings.get('sandbox_network_access') or False)
+
+        extra_perms = codex_cfg.get('permissions', [])
+        if isinstance(extra_perms, str):
+            extra_perms = [extra_perms]
+        extra_perms = [os.path.abspath(p) for p in extra_perms if isinstance(p, str)]
+
+        writable_roots: list[str] = []
+        for p in folders + extra_perms:
+            ap = os.path.abspath(p)
+            if ap not in writable_roots and ap != cwd:
+                writable_roots.append(ap)
+
+        if sandbox_mode == 'workspace-write':
+            sandbox_policy = {
+                'mode': 'workspace-write',
+                'writable_roots': writable_roots,
+                'network_access': allow_network,
+            }
+        elif sandbox_mode == 'read-only':
+            sandbox_policy = {'mode': 'read-only'}
+        elif sandbox_mode == 'danger-full-access':
+            sandbox_policy = {'mode': 'danger-full-access'}
+        else:
+            sandbox_policy = {'mode': 'read-only'}
+
+        # Determine model + reasoning settings required by `user_turn`.
+        model = codex_cfg.get('model') or global_settings.get('model') or 'gpt-5'
+        reasoning_effort = (
+            codex_cfg.get('model_reasoning_effort')
+            or global_settings.get('model_reasoning_effort')
+            or 'medium'
+        )
+        reasoning_summary = (
+            codex_cfg.get('model_reasoning_summary')
+            or global_settings.get('model_reasoning_summary')
+            or 'detailed'
+        )
 
         bridge.send(
             {

@@ -24,7 +24,7 @@
 
     // Reasoning configuration (project-level values take precedence)
     "model_reasoning_effort": "medium",   // low | medium | high
-    "model_reasoning_summary": "detail",  // concise | detail
+    "model_reasoning_summary": "detailed",  // concise | detailed
 
     // Session policy
     "approval_policy": "on-failure", // on-failure | always | never
