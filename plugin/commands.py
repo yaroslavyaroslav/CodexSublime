@@ -168,45 +168,158 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         # Display information about the tool invocation in a concise form.
         header = '### Tool call\n\n'
 
-        server = msg.get('server', '')
-        tool = msg.get('tool', '')
-        call_id = msg.get('call_id', '')
-        arguments = msg.get('arguments', {})
+        # Prefer the canonical Codex schema: `invocation.{server, tool, arguments}`
+        invocation = msg.get('invocation') if isinstance(msg.get('invocation'), dict) else None
 
-        args_json = json.dumps(arguments, indent=2) if arguments else '{}'
+        # Be liberal in what we accept – if `invocation` is absent, fall back
+        # to alternative shapes some servers may use.
+        raw_server = (invocation.get('server') if invocation else None) or msg.get('server')
+        if isinstance(raw_server, dict):
+            server = raw_server.get('name') or raw_server.get('id') or raw_server.get('identifier') or ''
+        else:
+            server = str(raw_server) if raw_server is not None else ''
 
-        body = (
-            f'`server`: `{server}`  \n'
-            f'`tool`: `{tool}`  \n'
-            f'`call_id`: `{call_id}`\n\n'
-            f'```json\n{args_json}\n```\n\n'
+        raw_tool = (invocation.get('tool') if invocation else None) or msg.get('tool')
+        if isinstance(raw_tool, dict):
+            tool = raw_tool.get('name') or raw_tool.get('id') or raw_tool.get('identifier') or ''
+        else:
+            tool = str(raw_tool) if raw_tool is not None else ''
+
+        # Additional fallbacks some servers may use.
+        if not server:
+            server = (
+                msg.get('server_name')
+                or msg.get('server_id')
+                or msg.get('server_identifier')
+                or ''
+            )
+        if not tool:
+            tool = (
+                msg.get('tool_name')
+                or msg.get('tool_id')
+                or msg.get('tool_identifier')
+                or ''
+            )
+
+        # Best-effort extraction of a method/function/procedure name used by
+        # the tool, and its arguments.  Different servers use different keys.
+        method = (
+            msg.get('method')
+            or msg.get('method_name')
+            or msg.get('procedure')
+            or msg.get('function')
+            or (invocation.get('method') if invocation else None)
+            or (raw_tool.get('method') if isinstance(raw_tool, dict) else None)
+            or ''
         )
+
+        call_id = msg.get('call_id', '')
+
+        # Gather arguments from canonical `invocation.arguments`, then common fallbacks.
+        arguments = (
+            (invocation.get('arguments') if invocation else None)
+            or msg.get('arguments')
+            or msg.get('args')
+            or msg.get('params')
+            or msg.get('parameters')
+            or msg.get('input')
+            or (raw_tool.get('arguments') if isinstance(raw_tool, dict) else None)
+            or {}
+        )
+
+        # Header lines
+        body = (
+            f'`server`: `{server}`  \n' if server else ''
+        )
+        body += f'`tool`: `{tool}`  \n' if tool else ''
+        # Only show `method` when it is explicitly provided and differs from `tool`.
+        try:
+            tool_cmp = (tool or '').strip().lower()
+            method_cmp = (method or '').strip().lower()
+        except Exception:
+            tool_cmp = str(tool)
+            method_cmp = str(method)
+
+        if method and method_cmp != tool_cmp:
+            body += f'`method`: `{method}`  \n'
+        body += f'`call_id`: `{call_id}`\n\n' if call_id else '\n'
+
+        # Always render an arguments block, even when empty, as requested.
+        try:
+            args_block = json.dumps(arguments, indent=2)
+        except Exception:
+            # Arguments might be a raw string; try to parse JSON-looking text.
+            try:
+                import ast  # local import to avoid top-level cost
+
+                if isinstance(arguments, str):
+                    stripped = arguments.strip()
+                    if stripped.startswith('{') or stripped.startswith('['):
+                        args_block = json.dumps(json.loads(stripped), indent=2)
+                    else:
+                        args_block = json.dumps({'value': arguments}, indent=2)
+                else:
+                    args_block = json.dumps({'value': str(arguments)}, indent=2)
+            except Exception:
+                args_block = json.dumps({'value': str(arguments)}, indent=2)
+
+        body += f'```json\n{args_block}\n```\n\n'
 
     elif msg_type == 'mcp_tool_call_end':
         header = ''  # keep output compact – this follows command_end style.
 
         result = msg.get('result', {})
 
+        def _looks_like_json(s: str) -> bool:
+            s = s.strip()
+            return (s.startswith('{') and s.endswith('}')) or (s.startswith('[') and s.endswith(']'))
+
         if 'Ok' in result:
             ok_payload = result['Ok']
 
-            # DuckDuckGo and other servers often return a list of content
-            # items.  Extract plain-text segments so the transcript remains
-            # readable without overwhelming markdown formatting.
-            content_items = ok_payload.get('content', []) if isinstance(ok_payload, dict) else []
+            display_json = None
+            display_text = None
 
-            if content_items and isinstance(content_items, list):
-                texts = [c.get('text', '') for c in content_items if isinstance(c, dict)]
-                result_text = '\n'.join(texts).strip()
+            if isinstance(ok_payload, dict):
+                # Prefer structured content if provided.
+                sc = ok_payload.get('structuredContent') or ok_payload.get('structured_content')
+                if isinstance(sc, dict) and 'result' in sc:
+                    display_json = sc['result']
+                else:
+                    content_items = ok_payload.get('content', [])
+                    if isinstance(content_items, list) and content_items:
+                        texts = [c.get('text', '') for c in content_items if isinstance(c, dict)]
+                        texts = [t for t in texts if t]
+                        if texts and all(_looks_like_json(t) for t in texts):
+                            # Aggregate JSON lines into an array for nicer formatting.
+                            try:
+                                parsed = [json.loads(t) for t in texts]
+                                display_json = parsed
+                            except Exception:
+                                display_text = '\n'.join(texts).strip()
+                        else:
+                            display_text = '\n'.join(texts).strip()
+                    else:
+                        # Fallback: pretty-print entire payload.
+                        display_json = ok_payload
             else:
-                # Fallback: pretty-print JSON for any other payload.
-                result_text = json.dumps(ok_payload, indent=2)
+                # Non-dict payload – show as text.
+                display_text = str(ok_payload)
 
-            body = f'```\n{result_text}\n```\n\n'
+            if display_json is not None:
+                body = f'```json\n{json.dumps(display_json, indent=2)}\n```\n\n'
+            elif display_text is not None:
+                body = f'```\n{display_text}\n```\n\n'
+            else:
+                body = '``````\n\n'  # unreachable but safe default
 
         elif 'Err' in result:
             err_payload = result['Err']
-            body = f'`Error`: {err_payload}\n\n'
+            # Render errors in a readable, consistent way.
+            try:
+                body = f'`Error`: {json.dumps(err_payload)}\n\n'
+            except Exception:
+                body = f'`Error`: {err_payload}\n\n'
         else:
             # Unexpected shape – show raw result.
             body = f'```json\n{json.dumps(result, indent=2)}\n```\n\n'
