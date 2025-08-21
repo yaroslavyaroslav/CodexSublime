@@ -6,5 +6,20 @@
             { "key": "panel_has_focus" },
             { "key": "panel", "operand": "output.codex_input" }
         ]
+    },
+    {
+        "keys": ["primary+v"],
+        "command": "chain",
+        "args": {
+            "commands": [
+                { "command": "insert", "args": { "characters": "```\n" } },
+                { "command": "paste_and_indent" },
+                { "command": "insert", "args": { "characters": "\n```\n\n" } }
+            ]
+        },
+        "context": [
+            { "key": "panel_has_focus" },
+            { "key": "panel", "operand": "output.codex_input" }
+        ]
     }
 ]
