@@ -130,6 +130,12 @@ section.  Example:
                 // additional writable paths (project folders are added automatically)
                 "/Users/me/tmp-extra"
             ]
+            ,
+            // Auto-fold specific sections in the transcript by their header
+            // name (case-insensitive). You can pass a string or a list.
+            // Example: fold the model's internal reasoning block
+            // (rendered as "## agent_reasoning").
+            "fold_sections": ["agent_reasoning"]
         }
     }
 }
@@ -201,6 +207,39 @@ The plugin only sends the code snippets that you explicitly type or select in th
 
 However keep in mind that since this plugin and tool it relays on is agentish, any data from within your sandbox area could be sent to a server.
 
+## Auto-folding sections
+
+You can tell the transcript to auto-fold certain sections by header name. The
+match is case-insensitive and can be configured globally or per-project.
+
+- Global (Preferences ▸ Package Settings ▸ Codex ▸ Settings):
+
+  ```jsonc
+  {
+    // ... other settings ...
+    "fold_sections": ["agent_reasoning"]
+  }
+  ```
+
+- Per project (`.sublime-project` under `settings.codex`):
+
+  ```jsonc
+  {
+    "settings": {
+      "codex": {
+        "fold_sections": ["agent_reasoning"]
+      }
+    }
+  }
+  ```
+
+Notes
+- Folding is scope-based and targets the Markdown `meta.section` for that
+  header. Only the section body is folded, so the header line shows with an
+  inline ellipsis (row style), e.g.: `## agent_reasoning ...`.
+- The fold is applied right after the section is appended. If your syntax
+  definition delays section scopes, the plugin waits briefly to target the
+  correct section.
+
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
 [^2]: If both requirements are met (1) `codex` is installed and (2) token in settings is provided.
-

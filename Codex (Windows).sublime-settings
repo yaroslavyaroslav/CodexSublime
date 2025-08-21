@@ -34,6 +34,12 @@
     // Additional writable folders for the agent (besides project folders and temp dirs)
     "permissions": [],
 
+    // Auto-fold certain sections in the transcript by their header name
+    // (case-insensitive). Accepts a string or a list of strings.
+    // Example to fold model's chain-of-thought headings:
+    //   "fold_sections": ["agent_reasoning"]
+    "fold_sections": ["agent_reasoning"],
+
     // Hide verbose incremental updates that clutter the transcript.
     "suppress_events": ["agent_reasoning_delta", "agent_message_delta", "token_count"]
 }

@@ -56,6 +56,45 @@ def _extract_text(msg: dict) -> str | None:
     return None
 
 
+def _get_fold_section_names(window: sublime.Window) -> set[str]:  # type: ignore[name-defined]
+    """Return a lowercased set of section names to auto-fold.
+
+    Reads from per-project settings at settings.codex.fold_sections, falling
+    back to global Codex.sublime-settings → fold_sections. Accepts a string
+    or list of strings. Comparison is case-insensitive.
+    """
+
+    names: set[str] = set()
+
+    try:
+        project_data = window.project_data() or {}
+        settings_block = project_data.get('settings') or {}
+        codex_cfg = settings_block.get('codex') or {}
+        proj = codex_cfg.get('fold_sections')
+        if isinstance(proj, str):
+            names.add(proj.strip().lower())
+        elif isinstance(proj, list):
+            for n in proj:
+                if isinstance(n, str):
+                    names.add(n.strip().lower())
+    except Exception:
+        pass
+
+    try:
+        global_settings = sublime.load_settings('Codex.sublime-settings')
+        glob = global_settings.get('fold_sections')
+        if isinstance(glob, str):
+            names.add(glob.strip().lower())
+        elif isinstance(glob, list):
+            for n in glob:
+                if isinstance(n, str):
+                    names.add(n.strip().lower())
+    except Exception:
+        pass
+
+    return names
+
+
 def _display_assistant_response(window: sublime.Window, prompt: str, event: dict, session_id: str) -> None:  # type: ignore[name-defined]
     """Append the Codex *event* to output panel using markdown formatting."""
 
@@ -78,10 +117,13 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     msg_type: str = msg.get('type', 'unknown')
 
     body = ''
+    header_title_for_fold: str | None = None  # extracted header label for auto-folding
     if msg_type == 'task_started':
         header = '## Task started\n\n'
+        header_title_for_fold = 'Task started'
     elif msg_type == 'exec_command_begin':
         header = '### Command call\n\n'
+        header_title_for_fold = 'Command call'
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
         cwd_line = ''
@@ -103,6 +145,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         # to the Codex backend, otherwise it will keep waiting for ever.
 
         header = '### exec_approval\n\n'
+        header_title_for_fold = 'exec_approval'
 
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
@@ -174,6 +217,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     elif msg_type == 'mcp_tool_call_begin':
         # Display information about the tool invocation in a concise form.
         header = '### Tool call\n\n'
+        header_title_for_fold = 'Tool call'
 
         # Prefer the canonical Codex schema: `invocation.{server, tool, arguments}`
         invocation = msg.get('invocation') if isinstance(msg.get('invocation'), dict) else None
@@ -337,6 +381,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     elif msg_type == 'patch_apply_begin':
         header = '### Applying patch\n\n'
+        header_title_for_fold = 'Applying patch'
 
         auto_approved = msg.get('auto_approved', False)
         body = f'`auto_approved`: {auto_approved}\n\n'
@@ -374,6 +419,12 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         header = (
             f'## {msg_type}\n\n' if msg_type in ['user_input', 'agent_message'] else f'### {msg_type}\n\n'
         )
+        try:
+            # Remove leading hashes and whitespace to get a readable title.
+            header_line = header.splitlines()[0]
+            header_title_for_fold = header_line.lstrip('#').strip()
+        except Exception:
+            header_title_for_fold = None
         text = _extract_text(msg)
         if text:
             body = f'{text}\n\n'
@@ -381,6 +432,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     # Determine whether the caret was at end before appending so we can
     # preserve the reader's position unless they were following the tail.
     will_follow_tail = False
+    pre_size = 0
     if not is_panel:
         try:
             pre_size = target_view.size()
@@ -389,8 +441,115 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             # If anything goes wrong, default to current behaviour (follow tail).
             will_follow_tail = True
+    else:
+        # Still capture pre_size for panels so we know where the header begins.
+        try:
+            pre_size = target_view.size()
+        except Exception:
+            pre_size = 0
 
-    target_view.run_command('append', {'characters': header + body, 'force': True})
+    # Ensure section headers start on a new line. If the buffer doesn't end
+    # with a newline and we're about to append content that doesn't start
+    # with one, prefix a single "\n" so folded previews don't run headers
+    # together like "## A … ## B" on the same line.
+    to_append = header + body
+    try:
+        needs_leading_nl = False
+        if pre_size > 0 and to_append and not to_append.startswith('\n'):
+            last_char = target_view.substr(sublime.Region(pre_size - 1, pre_size))
+            needs_leading_nl = last_char != '\n'
+        if needs_leading_nl:
+            to_append = '\n' + to_append
+    except Exception:
+        pass
+
+    target_view.run_command('append', {'characters': to_append, 'force': True})
+
+    # Auto-fold freshly appended section when configured to do so.
+    try:
+        fold_names = _get_fold_section_names(window)
+        should_fold = bool(header_title_for_fold and fold_names and header_title_for_fold.strip().lower() in fold_names)
+        if should_fold and pre_size >= 0:
+            # Defer folding slightly to allow syntax scopes to update, so the
+            # new meta.section exists and we don't accidentally fold the previous one.
+            def _attempt_fold(tries_left: int = 6) -> None:
+                try:
+                    if tries_left <= 0 or target_view.is_loading():
+                        return
+                    # Determine the start of the newly added header.
+                    probe = pre_size
+                    try:
+                        if to_append.startswith('\n'):
+                            probe = pre_size + 1
+                    except Exception:
+                        pass
+
+                    sections = target_view.find_by_selector('meta.section')
+                    # Work with sections sorted by start
+                    sections.sort(key=lambda r: r.begin())
+                    if not sections:
+                        sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
+                        return
+
+                    # Prefer the section whose begin matches the header line begin.
+                    header_line_begin = target_view.line(probe).begin()
+                    exact = [r for r in sections if r.begin() == header_line_begin]
+                    def _fold_row_style(sec: sublime.Region) -> bool:
+                        try:
+                            # Fold only the section body (exclude header line) and
+                            # leave the newline before the next header visible to
+                            # prevent inline joining like "... ## next".
+                            header_line = target_view.line(probe)
+                            body_start = header_line.end()
+
+                            # Find the next section's start after this one
+                            next_begin = None
+                            for r in sections:
+                                if r.begin() > sec.begin():
+                                    next_begin = r.begin()
+                                    break
+
+                            if next_begin is None:
+                                # Last section: fold to section end, but prefer to
+                                # leave a trailing newline (if present) out of the fold
+                                end = sec.end()
+                                try:
+                                    if end - 1 >= 0 and target_view.substr(sublime.Region(end - 1, end)) == '\n':
+                                        end = end - 1
+                                except Exception:
+                                    pass
+                                body_end = end
+                            else:
+                                # Fold up to just before the next header's first char
+                                # (i.e., exclude the newline preceding it).
+                                body_end = max(body_start, next_begin - 1)
+
+                            if body_start < body_end:
+                                target_view.fold(sublime.Region(body_start, body_end))
+                                return True
+                        except Exception:
+                            pass
+                        return False
+
+                    if exact:
+                        if _fold_row_style(exact[0]):
+                            return
+
+                    # Fallback: fold the last section (highest begin) – most likely the new one.
+                    last = sections[-1]
+                    if last.contains(probe) or last.begin() >= header_line_begin:
+                        if _fold_row_style(last):
+                            return
+
+                    # If scopes are still stale, retry shortly.
+                    sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
+                except Exception:
+                    pass
+
+            sublime.set_timeout(_attempt_fold, 30)
+    except Exception:
+        # Never let folding errors break output updates.
+        pass
 
     if not is_panel and will_follow_tail:
         # Only auto-scroll in the transcript tab when the caret was at the
