@@ -1,6 +1,6 @@
 [
     {
-        "keys": ["super+enter"],
+        "keys": ["primary+enter"],
         "command": "codex_submit_input_panel",
         "context": [
             { "key": "panel_has_focus" },
