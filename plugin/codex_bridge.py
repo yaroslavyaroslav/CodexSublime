@@ -151,7 +151,9 @@ class _CodexBridge:
                 'and expose it either in the environment or the plugin settings.'
             )
 
-        # Decide working directory: first project folder or current.
+        # Decide working directory so Codex can discover AGENTS.md correctly.
+        # Prefer the directory of the active file; fall back to the first
+        # project folder; finally use the current working directory.
         window = sublime.active_window()
         project_folders = window.folders() if window else []
 
@@ -159,10 +161,24 @@ class _CodexBridge:
         # safely within the sandbox *permissions* list later on.
         self._project_folders = [os.path.abspath(p) for p in project_folders]
 
-        # The *cwd* for the Codex subprocess is still the first project folder
-        # (if any) to preserve existing behaviour, otherwise it falls back to
-        # the current working directory.
-        self._cwd = os.path.abspath(self._project_folders[0] if self._project_folders else os.getcwd())
+        active_file_dir: Optional[str] = None
+        try:
+            view = window.active_view() if window else None
+            fn = view.file_name() if view else None
+            if fn:
+                active_file_dir = os.path.abspath(os.path.dirname(fn))
+        except Exception:
+            active_file_dir = None
+
+        if active_file_dir:
+            # If the active file sits inside any project folder, prefer that
+            # directory so Codex picks up a subfolder-level AGENTS.md if
+            # present. Otherwise, fall back to the first project folder.
+            self._cwd = active_file_dir
+        elif self._project_folders:
+            self._cwd = os.path.abspath(self._project_folders[0])
+        else:
+            self._cwd = os.path.abspath(os.getcwd())
 
         logger.debug('Launching Codex subprocess (cwd=%s)', self._cwd)
 
