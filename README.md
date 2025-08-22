@@ -23,7 +23,7 @@ Palette.
     - Symbol list included in answers
 - Works out of the box[^2].
 
-## Installation
+### Installation
 
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
 
