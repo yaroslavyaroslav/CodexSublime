@@ -1,3 +1,5 @@
+[![MSeeP.ai Security Assessment Badge](https://mseep.net/pr/yaroslavyaroslav-codexsublime-badge.png)](https://mseep.ai/app/yaroslavyaroslav-codexsublime)
+
 # Codex Sublime Text plug-in
 
 Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
