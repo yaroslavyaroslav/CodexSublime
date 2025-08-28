@@ -21,6 +21,21 @@ logger = logging.getLogger(__name__)
 TRANSCRIPT_VIEW_FLAG = 'codex_is_transcript'
 
 
+def _package_name() -> str:
+    """Return the Sublime package folder name for this plugin."""
+    try:
+        # commands.py lives in <package>/plugin/commands.py
+        return os.path.basename(os.path.dirname(os.path.dirname(__file__)))
+    except Exception:
+        # Fallback to the expected package name when installed per README
+        return 'Codex'
+
+
+def _markdown_syntax_resource() -> str:
+    """Return resource path to the bundled Markdown syntax."""
+    return f"Packages/{_package_name()}/Syntaxes/Markdown.sublime-syntax"
+
+
 def _get_transcript_view(window: sublime.Window) -> sublime.View | None:  # type: ignore[name-defined]
     """Find and return the Codex transcript view in *window* (if any)."""
 
@@ -107,7 +122,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         is_panel = False
 
     target_view.set_read_only(False)
-    target_view.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+    target_view.assign_syntax(_markdown_syntax_resource())
 
     target_view.settings().set('scroll_past_end', True)
     target_view.settings().set('gutter', True)
@@ -122,8 +137,8 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         header = '## Task started\n\n'
         header_title_for_fold = 'Task started'
     elif msg_type == 'exec_command_begin':
-        header = '### Command call\n\n'
-        header_title_for_fold = 'Command call'
+        header = '### Command Call\n\n'
+        header_title_for_fold = 'Command Call'
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
         cwd_line = ''
@@ -194,7 +209,8 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         window.show_quick_panel(quick_panel_items, _on_done)
 
     elif msg_type == 'exec_command_end':
-        header = ''
+        header = '### Command Output\n\n'
+        header_title_for_fold = 'Command Output'
         exit_code = msg.get('exit_code', 0)
         stderr = msg.get('stderr', '')
         stdout = msg.get('stdout', '')
@@ -580,7 +596,7 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 
         panel = window.create_output_panel(self.INPUT_PANEL_NAME)
         panel.set_read_only(False)
-        panel.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+        panel.assign_syntax(_markdown_syntax_resource())
         panel.settings().set('scroll_past_end', True)
         panel.settings().set('gutter', True)
         panel.settings().set('line_numbers', False)
@@ -792,7 +808,7 @@ class CodexOpenTranscriptCommand(sublime_plugin.WindowCommand):
             newly_created = True
             view.set_name('Codex')
             view.set_scratch(True)
-            view.assign_syntax('Packages/Markdown/MultiMarkdown.sublime-syntax')
+            view.assign_syntax(_markdown_syntax_resource())
             view.settings().set(TRANSCRIPT_VIEW_FLAG, True)
 
         # If we just created the tab, seed it with the existing output panel
