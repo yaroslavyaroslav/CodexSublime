@@ -1,6 +1,12 @@
 # Codex Sublime Text plug-in
 
 Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
+
+## Upgrade Notes
+
+- API token setting: This package expects your OpenAI API token in the `token` setting and exports it to the environment variable named by `env_key` (default: `OPENAI_API_KEY`). If you previously used another package with a different setting name, please add `"token": "sk-..."` to your Codex settings or set the corresponding environment variable.
+
+- Markdown and folding: The transcript and input panels now use a bundled Markdown syntax for improved headings and section folding. You can auto‑fold sections by header via `fold_sections` in project or global Codex settings.
 The plug-in spins up a `codex proto` subprocess, shows the conversation in a
 Markdown panel and lets you execute three simple commands from the Command
 Palette.
@@ -28,7 +34,7 @@ Palette.
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
 
    ```bash
-   npm i -g @openai/codex   # or any recent version that supports `proto`
+    npm i -g @openai/codex   # or any recent version that supports `proto`
    ```
 
    By default the plug-in looks for the binary at:
@@ -71,7 +77,7 @@ project-specific `codex` settings:
 
 That’s it – no settings file required.
 
-3. **Create an OpenAI token** and tell the plug-in about it.
+3. **Create an OpenAI token** and tell the plug‑in about it.
 
    *Open the menu* → **Preferences › Package Settings › Codex** and put your
    key into the generated `Codex.sublime-settings` file:
@@ -83,6 +89,8 @@ That’s it – no settings file required.
 
        // your OpenAI key – REQUIRED
        "token": "sk-…"
+       // exported to this env var for the Codex CLI
+       "env_key": "OPENAI_API_KEY"
    }
    ```
 
@@ -209,7 +217,7 @@ However keep in mind that since this plugin and tool it relays on is agentish, a
 
 ## Auto-folding sections
 
-You can tell the transcript to auto-fold certain sections by header name. The
+You can tell the transcript to auto‑fold certain sections by header name. The
 match is case-insensitive and can be configured globally or per-project.
 
 - Global (Preferences ▸ Package Settings ▸ Codex ▸ Settings):
