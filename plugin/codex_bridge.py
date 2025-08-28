@@ -17,8 +17,7 @@ import signal
 import subprocess
 import threading
 import uuid
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import sublime
 
@@ -151,7 +150,9 @@ class _CodexBridge:
                 'and expose it either in the environment or the plugin settings.'
             )
 
-        # Decide working directory: first project folder or current.
+        # Decide working directory so Codex can discover AGENTS.md correctly.
+        # Prefer the directory of the active file; fall back to the first
+        # project folder; finally use the current working directory.
         window = sublime.active_window()
         project_folders = window.folders() if window else []
 
@@ -159,10 +160,24 @@ class _CodexBridge:
         # safely within the sandbox *permissions* list later on.
         self._project_folders = [os.path.abspath(p) for p in project_folders]
 
-        # The *cwd* for the Codex subprocess is still the first project folder
-        # (if any) to preserve existing behaviour, otherwise it falls back to
-        # the current working directory.
-        self._cwd = os.path.abspath(self._project_folders[0] if self._project_folders else os.getcwd())
+        active_file_dir: Optional[str] = None
+        try:
+            view = window.active_view() if window else None
+            fn = view.file_name() if view else None
+            if fn:
+                active_file_dir = os.path.abspath(os.path.dirname(fn))
+        except Exception:
+            active_file_dir = None
+
+        if active_file_dir:
+            # If the active file sits inside any project folder, prefer that
+            # directory so Codex picks up a subfolder-level AGENTS.md if
+            # present. Otherwise, fall back to the first project folder.
+            self._cwd = active_file_dir
+        elif self._project_folders:
+            self._cwd = os.path.abspath(self._project_folders[0])
+        else:
+            self._cwd = os.path.abspath(os.getcwd())
 
         logger.debug('Launching Codex subprocess (cwd=%s)', self._cwd)
 
@@ -364,8 +379,7 @@ class _CodexBridge:
             if msg_type in suppress:
                 continue  # skip noisy interim updates entirely
 
-            dispatch_cb: Optional[callable[[dict[str, Any]], None]] = None
-            using_fallback = False
+            dispatch_cb: Optional[Callable[[dict[str, Any]], None]] = None
 
             if call_id in self._callbacks:
                 dispatch_cb = self._callbacks[call_id]
@@ -376,7 +390,6 @@ class _CodexBridge:
             elif self._last_msg_id and call_id == self._last_msg_id and self._last_cb:
                 # Fallback path – deliver even if mapping was cleared.
                 dispatch_cb = self._last_cb
-                using_fallback = True
 
             if dispatch_cb is not None:
                 # If we've reached completion, clear fallback as well.
