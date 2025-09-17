@@ -37,9 +37,7 @@ Palette.
    winget install OpenAI.Codex
    ```
 
-   By default the plug-in looks for the binary at:
-
-   * macOS (Homebrew): `/opt/homebrew/bin/codex`
+   By default the plug-in uses "which(codex)"
 
 If yours lives somewhere else, set the `codex_path` setting (see below). It
 accepts either a single string (e.g. `"codex.exe"` when Codex is installed natively
