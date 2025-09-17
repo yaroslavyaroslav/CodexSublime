@@ -426,14 +426,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         header = '### Apply changes?\n\n'
         header_title_for_fold = 'apply_patch_approval'
 
-        reason = msg.get('reason')
-        if reason:
-            body += f'*Reason*: {str(reason)}\n\n'
-
-        grant_root = msg.get('grant_root')
-        if grant_root:
-            body += f'`grant_root`: `{str(grant_root)}`\n\n'
-
         body += _format_patch_changes(msg.get('changes', {}))
 
         quick_panel_items = [
