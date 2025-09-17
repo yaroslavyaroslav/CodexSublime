@@ -56,19 +56,14 @@ on Windows) or an array of strings – e.g.:
     2. Manual
         Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
 
-That’s it – no settings file required.
 
-3. **Create an OpenAI token** and tell the plug-in about it.
+3. Optionally create an OpenAI token and tell the plug-in about it.
 
    *Open the menu* → **Preferences › Package Settings › Codex** and put your
    key into the generated `Codex.sublime-settings` file:
 
    ```jsonc
    {
-       // where the CLI lives (override if different)
-       "codex_path": "/opt/homebrew/bin/codex",
-
-       // your OpenAI key – REQUIRED
        "token": "sk-…"
    }
    ```
