@@ -677,9 +677,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             sublime.status_message('prompt is empty')
             return
 
-        # Close and destroy the input panel so it does not linger in the panel list.
         self.window.run_command('hide_panel')
-        self.window.destroy_output_panel(self.INPUT_PANEL_NAME)
 
         bridge = get_bridge(self.window)
         project_data = self.window.project_data() or {}
