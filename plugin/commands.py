@@ -208,6 +208,85 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         # transcript so both happen in a single UI update.
         window.show_quick_panel(quick_panel_items, _on_done)
 
+    # ------------------------------------------------------------------
+    # "Apply changes?" approval request -------------------------------------------------
+    # ------------------------------------------------------------------
+    elif msg_type == 'apply_patch_approval_request':
+        header = '### Apply changes?\n\n'
+        header_title_for_fold = 'apply_patch_approval'
+
+        call_id = msg.get('call_id')
+
+        changes = msg.get('changes', {})
+        if isinstance(changes, dict):
+            for file_path, change_info in changes.items():
+                if not isinstance(change_info, dict):
+                    body += f'**{file_path}**\n\n'
+                    continue
+
+                op_type = ''
+                for key in change_info.keys():
+                    if key != 'move_path':
+                        op_type = key
+                        break
+
+                move_path = change_info.get('move_path')
+
+                if op_type:
+                    body += f'**{file_path}** ({op_type})\n'
+                else:
+                    body += f'**{file_path}**\n'
+
+                if move_path:
+                    body += f'-> `{move_path}`\n'
+
+                diff_payload = change_info.get(op_type, {}) if op_type else {}
+                unified_diff = diff_payload.get('unified_diff') if isinstance(diff_payload, dict) else None
+
+                if unified_diff:
+                    body += f'```diff\n{unified_diff}\n```\n'
+
+                body += '\n'
+        else:
+            try:
+                dump = json.dumps(changes, indent=2)
+            except Exception:
+                dump = str(changes)
+            body += f'```json\n{dump}\n```\n\n'
+
+        quick_panel_items = [
+            ['Apply patch', 'Apply these changes once'],
+            ['Always apply', 'Always allow this patch without asking'],
+            ['Reject', 'Reject the patch'],
+            ['Abort Execution', 'Stop session completely'],
+        ]
+
+        def _on_done(index: int, *, _window=window, _event=event) -> None:  # noqa: D401 – callback
+            choice_map = {
+                0: 'approved',
+                1: 'approved_for_session',
+                2: 'denied',
+                3: 'abort',
+                -1: 'denied',
+            }
+
+            decision = choice_map.get(index, 'denied')
+            logger.debug('call id for patch approval: %s', _event.get('id', 'wrong_id'))
+
+            bridge = get_bridge(_window)
+            bridge.send(
+                {
+                    'id': session_id,
+                    'op': {
+                        'id': _event.get('id'),
+                        'type': 'patch_approval',
+                        'decision': decision,
+                    },
+                },
+            )
+
+        window.show_quick_panel(quick_panel_items, _on_done)
+
     elif msg_type == 'exec_command_end':
         header = '### Command Output\n\n'
         header_title_for_fold = 'Command Output'
