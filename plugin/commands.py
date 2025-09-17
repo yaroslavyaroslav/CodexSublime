@@ -434,6 +434,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
         quick_panel_items = [
             ['Yes', 'Apply these changes'],
+            ['Always Yes', 'Always allow this exact patch without asking'],
             ['No', 'Reject the patch but keep the session running'],
             ['Abort Execution', 'Stop session completely'],
         ]
@@ -441,8 +442,9 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         def _on_done(index: int, *, _window=window, _event=event):  # noqa: D401 – callback
             choice_map = {
                 0: 'approved',
-                1: 'denied',
-                2: 'abort',
+                1: 'approved_for_session',
+                2: 'denied',
+                3: 'abort',
                 -1: 'denied',
             }
 
