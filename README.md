@@ -48,23 +48,9 @@ Windows where you might want to launch through WSL:
 }
 ```
 
-Suppressing noisy events
------------------------
-
-If the Codex backend floods the transcript with incremental updates such as
-`agent_reasoning_delta`, add them to the `suppress_events` array in your
-project-specific `codex` settings:
-
-```jsonc
-{
-  "suppress_events": ["agent_reasoning_delta"]
-}
-```
-
 2. Plugin installation
     1. With Package Control
-        1. `Package Control: Add Repository` → `https://github.com/yaroslavyaroslav/CodexSublime`  
-        2. `Package Control: Install Package` → **Codex**
+        `Package Control: Install Package` → **Codex**
 
     2. Manual
         Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
@@ -206,6 +192,18 @@ Enjoy hacking with Codex inside Sublime Text!  🚀
 The plugin only sends the code snippets that you explicitly type or select in the input panel to the language model. It never uploads your entire file, buffer, or project automatically. Local configuration (such as sandbox permissions or project folders) is used only by the CLI to enforce file I/O rules and is not included in the prompt context.
 
 However keep in mind that since this plugin and tool it relays on is agentish, any data from within your sandbox area could be sent to a server.
+
+## Suppressing noisy events
+
+If the Codex backend floods the transcript with incremental updates such as
+`agent_reasoning_delta`, add them to the `suppress_events` array in your
+project-specific `codex` settings:
+
+```jsonc
+{
+  "suppress_events": ["agent_reasoning_delta"]
+}
+```
 
 ## Auto-folding sections
 
