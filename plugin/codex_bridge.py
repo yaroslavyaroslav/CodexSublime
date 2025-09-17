@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -214,10 +215,21 @@ class _CodexBridge:
         # fall back to ``shlex.split`` to turn it into tokens.
         # -----------------------------------------------------------------
 
-        raw_cmd = settings.get('codex_path', '/opt/homebrew/bin/codex')  # type: ignore[arg-type]
+        raw_cmd = settings.get('codex_path') or 'codex'  # type: ignore[arg-type]
 
+        cmd: list[str]
         if isinstance(raw_cmd, str):
-            cmd: list[str] = shlex.split(raw_cmd)
+            if not os.path.isabs(raw_cmd):
+                cmd = [shutil.which(raw_cmd)]
+                if cmd == [None]:
+                    raise RuntimeError(
+                        f"which('{raw_cmd}') did not yield anything. \n"
+                        f"Make sure codex is installed already and available "
+                        f"on the command line. "
+                        f"Maybe point codex_path in your settings to its location."
+                    )
+            else:
+                cmd = shlex.split(raw_cmd)
         elif isinstance(raw_cmd, (list, tuple)):
             cmd = list(raw_cmd)
         else:  # pragma: no cover – invalid type guarded at runtime
