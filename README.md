@@ -28,25 +28,26 @@ Palette.
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
 
    ```bash
-   npm i -g @openai/codex   # or any recent version that supports `proto`
+   npm i -g @openai/codex
+   ```
+
+   On Windows you can use
+
+   ```bash
+   winget install OpenAI.Codex
    ```
 
    By default the plug-in looks for the binary at:
 
    * macOS (Homebrew): `/opt/homebrew/bin/codex`
 
-If yours lives somewhere else, set the `codex_path` setting (see below).  From
-vX.Y on, `codex_path` can also be an *array* of command tokens – handy on
-Windows where you might want to launch through WSL:
+If yours lives somewhere else, set the `codex_path` setting (see below). It
+accepts either a single string (e.g. `"codex.exe"` when Codex is installed natively
+on Windows) or an array of strings – e.g.:
 
 ```jsonc
-// "Codex (Windows).sublime-settings" – Sublime Text will automatically pick
-// the platform-specific default when you open *Preferences ▸ Package Settings ▸ Codex ▸ Settings* on Windows.
 {
   "codex_path": ["wsl", "-e", "codex"],
-  "token": "sk-..."
-}
-```
 
 Suppressing noisy events
 -----------------------
