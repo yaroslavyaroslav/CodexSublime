@@ -116,7 +116,12 @@ def _format_patch_changes(changes: dict) -> str:
     body = ''
 
     if not isinstance(changes, dict):
-        return body
+        try:
+            dump = json.dumps(changes, indent=2)
+            return f'```json\n{dump}\n```\n\n'
+        except Exception:
+            dump = str(changes)
+            return f'```\n{dump}\n```\n\n'
 
     for file_path, change_info in changes.items():
         if not isinstance(change_info, dict):
