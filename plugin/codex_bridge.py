@@ -279,6 +279,13 @@ class _CodexBridge:
         self.proc = subprocess.Popen(cmd, **popen_kwargs)
 
         self._lock = threading.Lock()
+        self._pending_lock = threading.Lock()
+        self._pending: list[tuple[Dict[str, Any], Optional[Callable[[dict[str, Any]], None]]]] = []
+        # ``proto`` sessions emit one of a handful of "session ready" events as
+        # soon as configuration / history replay has finished.  We wait for any
+        # of them before sending queued requests so we never race against the
+        # CLI boot sequence on slower machines.
+        self._ready = threading.Event()
         self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}
         # Fallback routing for active prompt: if the callback mapping gets
         # cleared too early by upstream changes, we still deliver events for
@@ -302,6 +309,9 @@ class _CodexBridge:
     def terminate(self) -> None:
         """Attempt to stop the Codex subprocess and all its descendants."""
 
+        self._discard_pending(reason='bridge_stopped', log_error=False)
+        self._ready.clear()
+
         if self.proc.poll() is None:
             # Kill descendants first, then the root process.
             kill_process_tree(self.proc.pid)
@@ -320,26 +330,17 @@ class _CodexBridge:
     def send(self, obj: Dict[str, Any], cb: Optional[callable[[dict[str, Any]], None]] = None) -> None:
         """Send a JSON *obj* to Codex and optionally register *cb* for replies."""
 
-        line = json.dumps(obj) + '\n'
-        with self._lock:
-            # The process may have crashed; guard against a broken pipe.
-            try:
-                assert self.proc.stdin is not None  # for mypy
-                self.proc.stdin.write(line)
-                self.proc.stdin.flush()
-            except BrokenPipeError:
-                logger.error('Broken pipe while sending data – process dead?')
-                return
-
-        if cb:
-            self._callbacks[obj['id']] = cb
+        if not self._ready.is_set():
             try:
                 op_type = obj.get('op', {}).get('type')
             except Exception:
                 op_type = None
-            if op_type == 'user_input':
-                self._last_msg_id = obj['id']
-                self._last_cb = cb
+            logger.debug('bridge not ready – queueing %s', op_type or 'message')
+            with self._pending_lock:
+                self._pending.append((obj, cb))
+            return
+
+        self._send_now(obj, cb)
 
     # -------------------------------------------------------------- internal --
 
@@ -365,6 +366,19 @@ class _CodexBridge:
             call_id = event.get('id')
             msg = event.get('msg', {})
             msg_type = msg.get('type')
+
+            if (
+                msg_type in {
+                    'session_configured',
+                    'session_created',
+                    'session_loaded',
+                    'session_ready',
+                    'session_resumed',
+                }
+                and not self._ready.is_set()
+            ):
+                self._ready.set()
+                self._flush_pending()
 
             # --------------------------------------------------------
             # Per-project event suppression ---------------------------------
@@ -408,6 +422,66 @@ class _CodexBridge:
                     self._last_cb = None
 
                 sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
+
+        # Reader terminated – either because the process exited or stdout was
+        # closed.  If we never observed a ready event we still have to discard
+        # queued messages so callers do not wait forever.
+        if not self._ready.is_set():
+            self._discard_pending()
+
+    def _send_now(self, obj: Dict[str, Any], cb: Optional[callable[[dict[str, Any]], None]]) -> None:
+        line = json.dumps(obj) + '\n'
+        with self._lock:
+            # The process may have crashed; guard against a broken pipe.
+            try:
+                assert self.proc.stdin is not None  # for mypy
+                self.proc.stdin.write(line)
+                self.proc.stdin.flush()
+            except BrokenPipeError:
+                logger.error('Broken pipe while sending data – process dead?')
+                return
+
+        if cb:
+            self._callbacks[obj['id']] = cb
+            try:
+                op_type = obj.get('op', {}).get('type')
+            except Exception:
+                op_type = None
+            if op_type == 'user_input':
+                self._last_msg_id = obj['id']
+                self._last_cb = cb
+
+    def _flush_pending(self) -> None:
+        with self._pending_lock:
+            pending = self._pending
+            self._pending = []
+
+        if not pending:
+            return
+
+        logger.debug('bridge ready – flushing %d queued message(s)', len(pending))
+        for queued_obj, queued_cb in pending:
+            self._send_now(queued_obj, queued_cb)
+
+    def _discard_pending(self, *, reason: str = 'bridge_not_ready', log_error: bool = True) -> None:
+        """Drop queued messages and notify callbacks that they will not run."""
+
+        with self._pending_lock:
+            pending = self._pending
+            self._pending = []
+
+        if not pending:
+            return
+
+        if log_error:
+            logger.error('bridge terminated before session became ready – dropping %d queued message(s)', len(pending))
+
+        for _, queued_cb in pending:
+            if queued_cb is not None:
+                try:
+                    queued_cb({'msg': {'type': 'error', 'reason': reason}})
+                except Exception:
+                    logger.debug('callback raised after bridge shutdown', exc_info=True)
 
     # ------------------------------------------------ session persistence --
 
