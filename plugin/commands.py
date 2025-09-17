@@ -422,7 +422,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     # ------------------------------------------------------------------
 
     elif msg_type == 'apply_patch_approval_request':
-        header = '### apply_patch_approval\n\n'
         header = '### Apply changes?\n\n'
         header_title_for_fold = 'apply_patch_approval'
 
