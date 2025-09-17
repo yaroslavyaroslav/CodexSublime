@@ -144,11 +144,6 @@ class _CodexBridge:
     def __init__(self) -> None:
         settings = sublime.load_settings('Codex.sublime-settings')
         OPENAI_API_KEY: str = settings.get('token', '')  # type: ignore[name-defined]
-        if not OPENAI_API_KEY:
-            raise RuntimeError(
-                'Missing OPENAI_API_KEY – make sure to create an API key '
-                'and expose it either in the environment or the plugin settings.'
-            )
 
         # Decide working directory so Codex can discover AGENTS.md correctly.
         # Prefer the directory of the active file; fall back to the first
@@ -182,7 +177,8 @@ class _CodexBridge:
         logger.debug('Launching Codex subprocess (cwd=%s)', self._cwd)
 
         env = os.environ.copy()
-        env['OPENAI_API_KEY'] = OPENAI_API_KEY
+        if OPENAI_API_KEY and OPENAI_API_KEY != "<your-token>":
+            env['OPENAI_API_KEY'] = OPENAI_API_KEY
 
         popen_kwargs: dict[str, Any] = {
             'stdin': subprocess.PIPE,

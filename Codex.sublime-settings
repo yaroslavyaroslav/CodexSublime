@@ -4,6 +4,7 @@
     "codex_path": "/opt/homebrew/bin/codex",
 
     // Your provider API token used by the CLI (exported as OPENAI_API_KEY by default).
+    // Leave it alone if you authenticated "codex" with your account.
     "token": "<your-token>",
 
     // Provider configuration (can be overridden per-project in .sublime-project → settings.codex)
