@@ -46,6 +46,8 @@ on Windows) or an array of strings – e.g.:
 ```jsonc
 {
   "codex_path": ["wsl", "-e", "codex"],
+}
+```
 
 2. Plugin installation
     1. With Package Control
