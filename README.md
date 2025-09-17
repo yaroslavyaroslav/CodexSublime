@@ -49,6 +49,24 @@ on Windows) or an array of strings – e.g.:
 }
 ```
 
+When you provide a plain string it is parsed using shell-style rules. On
+Windows this means absolute paths that contain spaces need quotes, and
+backslashes must be escaped as they would be in JSON. For example:
+
+```jsonc
+{
+  "codex_path": "\"C:\\Program Files\\Codex\\codex.exe\""
+}
+```
+
+If you prefer to avoid escaping, provide a list instead:
+
+```jsonc
+{
+  "codex_path": ["C:/Program Files/Codex/codex.exe"]
+}
+```
+
 2. Plugin installation
     1. With Package Control
         `Package Control: Install Package` → **Codex**
