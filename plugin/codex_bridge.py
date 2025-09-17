@@ -221,21 +221,22 @@ class _CodexBridge:
 
         cmd: list[str]
         if isinstance(raw_cmd, str):
-            if not os.path.isabs(raw_cmd):
-                cmd = [shutil.which(raw_cmd)]
-                if cmd == [None]:
-                    raise RuntimeError(
-                        f"which('{raw_cmd}') did not yield anything. \n"
-                        f"Make sure codex is installed already and available "
-                        f"on the command line. "
-                        f"Maybe point codex_path in your settings to its location."
-                    )
-            else:
-                cmd = shlex.split(raw_cmd)
+            cmd = shlex.split(raw_cmd)
         elif isinstance(raw_cmd, (list, tuple)):
             cmd = list(raw_cmd)
         else:  # pragma: no cover – invalid type guarded at runtime
             raise TypeError('codex_path must be str or list[str]')
+
+        executable = cmd[0]
+        if not os.path.isabs(executable):
+            cmd[0] = shutil.which(executable)
+            if cmd[0] is None:
+                raise RuntimeError(
+                    f"which({executable}) did not yield anything. \n"
+                    "Make sure it is installed and available "
+                    "on the command line. "
+                    "Maybe point codex_path in your settings to its location."
+                )
 
         # Inject CLI config overrides so the spawned session matches
         # project/global settings. Proto subcommand only forwards `-c` overrides.

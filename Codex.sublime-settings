@@ -1,6 +1,13 @@
 {
-    // Path to the Codex CLI. You can also specify a list for complex launchers,
-    // e.g. ["wsl", "-e", "codex"]. A plain string is split similar to a shell.
+    // The Codex executable.  Can be a string or a list of strings.
+    // E.g. "codex", "sh --login-i -c codex", or "wsl -e codex" as long as the
+    // executable, the first arg, can be found on the PATH.
+    // In other words `which` or `where` on Windows must resolve it.
+    // Note that the plain string is split similar to a shell.  Esp. on Windows
+    // paths needs quotes and "\" slashes needs extra-care.
+    // E.g. "\"C:\\Program Files\\codex.exe\"".  You can avoid that by using
+    // the list format.
+    // Example for the list format: ["wsl", "-e", "codex"].
     "codex_path": "codex",
 
     // Your provider API token used by the CLI (exported as OPENAI_API_KEY by default).
