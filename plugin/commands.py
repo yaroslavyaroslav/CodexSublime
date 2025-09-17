@@ -444,6 +444,16 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         text = _extract_text(msg)
         if text:
             body = f'{text}\n\n'
+        else:
+            payload = {k: v for k, v in msg.items() if k != 'type'}
+            if payload:
+                body = '_Unhandled message payload shown for inspection._\n\n'
+                try:
+                    body += f'```json\n{json.dumps(payload, indent=2)}\n```\n\n'
+                except Exception:
+                    body += f'```\n{repr(payload)}\n```\n\n'
+            else:
+                body = '_No renderable content available for this message._\n\n'
 
     # Determine whether the caret was at end before appending so we can
     # preserve the reader's position unless they were following the tail.
