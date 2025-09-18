@@ -34,60 +34,42 @@ Palette.
 1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
 
    ```bash
-    npm i -g @openai/codex   # or any recent version that supports `proto`
+   npm i -g @openai/codex
    ```
 
-   By default the plug-in looks for the binary at:
+   On Windows you can use
 
-   * macOS (Homebrew): `/opt/homebrew/bin/codex`
+   ```bash
+   winget install OpenAI.Codex
+   ```
 
-If yours lives somewhere else, set the `codex_path` setting (see below).  From
-vX.Y on, `codex_path` can also be an *array* of command tokens – handy on
-Windows where you might want to launch through WSL:
+   By default the plug-in uses "which(codex)"
+
+If yours lives somewhere else, set the `codex_path` setting (see below). It
+accepts either a single string (e.g. `"codex.exe"` when Codex is installed natively
+on Windows) or an array of strings – e.g.:
 
 ```jsonc
-// "Codex (Windows).sublime-settings" – Sublime Text will automatically pick
-// the platform-specific default when you open *Preferences ▸ Package Settings ▸ Codex ▸ Settings* on Windows.
 {
   "codex_path": ["wsl", "-e", "codex"],
-  "token": "sk-..."
-}
-```
-
-Suppressing noisy events
------------------------
-
-If the Codex backend floods the transcript with incremental updates such as
-`agent_reasoning_delta`, add them to the `suppress_events` array in your
-project-specific `codex` settings:
-
-```jsonc
-{
-  "suppress_events": ["agent_reasoning_delta"]
 }
 ```
 
 2. Plugin installation
     1. With Package Control
-        1. `Package Control: Add Repository` → `https://github.com/yaroslavyaroslav/CodexSublime`  
-        2. `Package Control: Install Package` → **Codex**
+        `Package Control: Install Package` → **Codex**
 
     2. Manual
         Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
 
-That’s it – no settings file required.
 
-3. **Create an OpenAI token** and tell the plug‑in about it.
+3. Optionally create an OpenAI token and tell the plug-in about it.
 
    *Open the menu* → **Preferences › Package Settings › Codex** and put your
    key into the generated `Codex.sublime-settings` file:
 
    ```jsonc
    {
-       // where the CLI lives (override if different)
-       "codex_path": "/opt/homebrew/bin/codex",
-
-       // your OpenAI key – REQUIRED
        "token": "sk-…"
        // exported to this env var for the Codex CLI
        "env_key": "OPENAI_API_KEY"
@@ -214,6 +196,18 @@ Enjoy hacking with Codex inside Sublime Text!  🚀
 The plugin only sends the code snippets that you explicitly type or select in the input panel to the language model. It never uploads your entire file, buffer, or project automatically. Local configuration (such as sandbox permissions or project folders) is used only by the CLI to enforce file I/O rules and is not included in the prompt context.
 
 However keep in mind that since this plugin and tool it relays on is agentish, any data from within your sandbox area could be sent to a server.
+
+## Suppressing noisy events
+
+If the Codex backend floods the transcript with incremental updates such as
+`agent_reasoning_delta`, add them to the `suppress_events` array in your
+project-specific `codex` settings:
+
+```jsonc
+{
+  "suppress_events": ["agent_reasoning_delta"]
+}
+```
 
 ## Auto-folding sections
 

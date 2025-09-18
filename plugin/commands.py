@@ -110,6 +110,37 @@ def _get_fold_section_names(window: sublime.Window) -> set[str]:  # type: ignore
     return names
 
 
+def _format_patch_changes(changes: dict) -> str:
+    """Return a Markdown representation of patch *changes*."""
+
+    body = ''
+
+    if not isinstance(changes, dict):
+        try:
+            dump = json.dumps(changes, indent=2)
+            return f'```json\n{dump}\n```\n\n'
+        except Exception:
+            dump = str(changes)
+            return f'```\n{dump}\n```\n\n'
+
+    for file_path, change_info in changes.items():
+        if not isinstance(change_info, dict):
+            continue
+
+        file_label = str(file_path)
+        op_type = next(iter(change_info.keys()), '')
+        op_suffix = f' ({op_type})' if op_type else ''
+        body += f'**{file_label}**{op_suffix}\n'
+
+        diff_payload = change_info.get(op_type, {}) if isinstance(change_info, dict) else {}
+        if isinstance(diff_payload, dict):
+            unified_diff = diff_payload.get('unified_diff')
+            if unified_diff:
+                body += f'```diff\n{unified_diff}\n```\n\n'
+
+    return body
+
+
 def _display_assistant_response(window: sublime.Window, prompt: str, event: dict, session_id: str) -> None:  # type: ignore[name-defined]
     """Append the Codex *event* to output panel using markdown formatting."""
 
@@ -395,6 +426,44 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     # apply_patch wrapper events ---------------------------------------
     # ------------------------------------------------------------------
 
+    elif msg_type == 'apply_patch_approval_request':
+        header = '### Apply changes?\n\n'
+        header_title_for_fold = 'apply_patch_approval'
+
+        body += _format_patch_changes(msg.get('changes', {}))
+
+        quick_panel_items = [
+            ['Yes', 'Apply these changes'],
+            ['Always Yes', 'Always allow this exact patch without asking'],
+            ['No', 'Reject the patch but keep the session running'],
+            ['Abort Execution', 'Stop session completely'],
+        ]
+
+        def _on_done(index: int, *, _window=window, _event=event):  # noqa: D401 – callback
+            choice_map = {
+                0: 'approved',
+                1: 'approved_for_session',
+                2: 'denied',
+                3: 'abort',
+                -1: 'denied',
+            }
+
+            decision = choice_map.get(index, 'denied')
+            logger.debug('call id for approval: %s', _event.get('id', 'wrong_id'))
+            bridge = get_bridge(_window)
+            bridge.send(
+                {
+                    'id': session_id,
+                    'op': {
+                        'id': _event.get('id'),
+                        'type': 'patch_approval',
+                        'decision': decision,
+                    },
+                },
+            )
+
+        window.show_quick_panel(quick_panel_items, _on_done)
+
     elif msg_type == 'patch_apply_begin':
         header = '### Applying patch\n\n'
         header_title_for_fold = 'Applying patch'
@@ -402,19 +471,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         auto_approved = msg.get('auto_approved', False)
         body = f'`auto_approved`: {auto_approved}\n\n'
 
-        changes = msg.get('changes', {})
-        if isinstance(changes, dict):
-            for file_path, change_info in changes.items():
-                # Determine operation type.
-                op_type = next(iter(change_info.keys()), '') if isinstance(change_info, dict) else ''
-                body += f'**{file_path}** ({op_type})\n'
-
-                diff_payload = change_info.get(op_type, {}) if isinstance(change_info, dict) else {}
-                unified_diff = diff_payload.get('unified_diff') if isinstance(diff_payload, dict) else None
-
-                if unified_diff:
-                    # Wrap diff in a code block so it renders nicely in Markdown.
-                    body += f'```diff\n{unified_diff}\n```\n\n'
+        body += _format_patch_changes(msg.get('changes', {}))
 
     elif msg_type == 'patch_apply_end':
         header = ''
@@ -444,6 +501,16 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         text = _extract_text(msg)
         if text:
             body = f'{text}\n\n'
+        else:
+            payload = {k: v for k, v in msg.items() if k != 'type'}
+            if payload:
+                body = '_Unhandled message payload shown for inspection._\n\n'
+                try:
+                    body += f'```json\n{json.dumps(payload, indent=2)}\n```\n\n'
+                except Exception:
+                    body += f'```\n{repr(payload)}\n```\n\n'
+            else:
+                body = '_No renderable content available for this message._\n\n'
 
     # Determine whether the caret was at end before appending so we can
     # preserve the reader's position unless they were following the tail.
@@ -677,9 +744,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             sublime.status_message('prompt is empty')
             return
 
-        # Close and destroy the input panel so it does not linger in the panel list.
         self.window.run_command('hide_panel')
-        self.window.destroy_output_panel(self.INPUT_PANEL_NAME)
 
         bridge = get_bridge(self.window)
         project_data = self.window.project_data() or {}

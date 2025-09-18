@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -144,11 +145,6 @@ class _CodexBridge:
     def __init__(self) -> None:
         settings = sublime.load_settings('Codex.sublime-settings')
         OPENAI_API_KEY: str = settings.get('token', '')  # type: ignore[name-defined]
-        if not OPENAI_API_KEY:
-            raise RuntimeError(
-                'Missing OPENAI_API_KEY – make sure to create an API key '
-                'and expose it either in the environment or the plugin settings.'
-            )
 
         # Decide working directory so Codex can discover AGENTS.md correctly.
         # Prefer the directory of the active file; fall back to the first
@@ -182,13 +178,16 @@ class _CodexBridge:
         logger.debug('Launching Codex subprocess (cwd=%s)', self._cwd)
 
         env = os.environ.copy()
-        env['OPENAI_API_KEY'] = OPENAI_API_KEY
+        if OPENAI_API_KEY and OPENAI_API_KEY != "<your-token>":
+            env['OPENAI_API_KEY'] = OPENAI_API_KEY
 
         popen_kwargs: dict[str, Any] = {
             'stdin': subprocess.PIPE,
             'stdout': subprocess.PIPE,
             'stderr': subprocess.STDOUT,
             'text': True,
+            'encoding': 'utf-8',
+            'errors': 'replace',
             'bufsize': 1,
             'env': env,
             'cwd': self._cwd,
@@ -218,14 +217,26 @@ class _CodexBridge:
         # fall back to ``shlex.split`` to turn it into tokens.
         # -----------------------------------------------------------------
 
-        raw_cmd = settings.get('codex_path', '/opt/homebrew/bin/codex')  # type: ignore[arg-type]
+        raw_cmd = settings.get('codex_path') or 'codex'  # type: ignore[arg-type]
 
+        cmd: list[str]
         if isinstance(raw_cmd, str):
-            cmd: list[str] = shlex.split(raw_cmd)
+            cmd = shlex.split(raw_cmd)
         elif isinstance(raw_cmd, (list, tuple)):
             cmd = list(raw_cmd)
         else:  # pragma: no cover – invalid type guarded at runtime
             raise TypeError('codex_path must be str or list[str]')
+
+        executable = cmd[0]
+        if not os.path.isabs(executable):
+            cmd[0] = shutil.which(executable)
+            if cmd[0] is None:
+                raise RuntimeError(
+                    f"which({executable}) did not yield anything. \n"
+                    "Make sure it is installed and available "
+                    "on the command line. "
+                    "Maybe point codex_path in your settings to its location."
+                )
 
         # Inject CLI config overrides so the spawned session matches
         # project/global settings. Proto subcommand only forwards `-c` overrides.
@@ -269,6 +280,13 @@ class _CodexBridge:
         self.proc = subprocess.Popen(cmd, **popen_kwargs)
 
         self._lock = threading.Lock()
+        self._pending_lock = threading.Lock()
+        self._pending: list[tuple[Dict[str, Any], Optional[Callable[[dict[str, Any]], None]]]] = []
+        # ``proto`` sessions emit one of a handful of "session ready" events as
+        # soon as configuration / history replay has finished.  We wait for any
+        # of them before sending queued requests so we never race against the
+        # CLI boot sequence on slower machines.
+        self._ready = threading.Event()
         self._callbacks: dict[str, callable[[dict[str, Any]], None]] = {}
         # Fallback routing for active prompt: if the callback mapping gets
         # cleared too early by upstream changes, we still deliver events for
@@ -292,6 +310,9 @@ class _CodexBridge:
     def terminate(self) -> None:
         """Attempt to stop the Codex subprocess and all its descendants."""
 
+        self._discard_pending(reason='bridge_stopped', log_error=False)
+        self._ready.clear()
+
         if self.proc.poll() is None:
             # Kill descendants first, then the root process.
             kill_process_tree(self.proc.pid)
@@ -310,26 +331,17 @@ class _CodexBridge:
     def send(self, obj: Dict[str, Any], cb: Optional[callable[[dict[str, Any]], None]] = None) -> None:
         """Send a JSON *obj* to Codex and optionally register *cb* for replies."""
 
-        line = json.dumps(obj) + '\n'
-        with self._lock:
-            # The process may have crashed; guard against a broken pipe.
-            try:
-                assert self.proc.stdin is not None  # for mypy
-                self.proc.stdin.write(line)
-                self.proc.stdin.flush()
-            except BrokenPipeError:
-                logger.error('Broken pipe while sending data – process dead?')
-                return
-
-        if cb:
-            self._callbacks[obj['id']] = cb
+        if not self._ready.is_set():
             try:
                 op_type = obj.get('op', {}).get('type')
             except Exception:
                 op_type = None
-            if op_type == 'user_input':
-                self._last_msg_id = obj['id']
-                self._last_cb = cb
+            logger.debug('bridge not ready – queueing %s', op_type or 'message')
+            with self._pending_lock:
+                self._pending.append((obj, cb))
+            return
+
+        self._send_now(obj, cb)
 
     # -------------------------------------------------------------- internal --
 
@@ -355,6 +367,19 @@ class _CodexBridge:
             call_id = event.get('id')
             msg = event.get('msg', {})
             msg_type = msg.get('type')
+
+            if (
+                msg_type in {
+                    'session_configured',
+                    'session_created',
+                    'session_loaded',
+                    'session_ready',
+                    'session_resumed',
+                }
+                and not self._ready.is_set()
+            ):
+                self._ready.set()
+                self._flush_pending()
 
             # --------------------------------------------------------
             # Per-project event suppression ---------------------------------
@@ -398,6 +423,66 @@ class _CodexBridge:
                     self._last_cb = None
 
                 sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
+
+        # Reader terminated – either because the process exited or stdout was
+        # closed.  If we never observed a ready event we still have to discard
+        # queued messages so callers do not wait forever.
+        if not self._ready.is_set():
+            self._discard_pending()
+
+    def _send_now(self, obj: Dict[str, Any], cb: Optional[callable[[dict[str, Any]], None]]) -> None:
+        line = json.dumps(obj) + '\n'
+        with self._lock:
+            # The process may have crashed; guard against a broken pipe.
+            try:
+                assert self.proc.stdin is not None  # for mypy
+                self.proc.stdin.write(line)
+                self.proc.stdin.flush()
+            except BrokenPipeError:
+                logger.error('Broken pipe while sending data – process dead?')
+                return
+
+        if cb:
+            self._callbacks[obj['id']] = cb
+            try:
+                op_type = obj.get('op', {}).get('type')
+            except Exception:
+                op_type = None
+            if op_type == 'user_input':
+                self._last_msg_id = obj['id']
+                self._last_cb = cb
+
+    def _flush_pending(self) -> None:
+        with self._pending_lock:
+            pending = self._pending
+            self._pending = []
+
+        if not pending:
+            return
+
+        logger.debug('bridge ready – flushing %d queued message(s)', len(pending))
+        for queued_obj, queued_cb in pending:
+            self._send_now(queued_obj, queued_cb)
+
+    def _discard_pending(self, *, reason: str = 'bridge_not_ready', log_error: bool = True) -> None:
+        """Drop queued messages and notify callbacks that they will not run."""
+
+        with self._pending_lock:
+            pending = self._pending
+            self._pending = []
+
+        if not pending:
+            return
+
+        if log_error:
+            logger.error('bridge terminated before session became ready – dropping %d queued message(s)', len(pending))
+
+        for _, queued_cb in pending:
+            if queued_cb is not None:
+                try:
+                    queued_cb({'msg': {'type': 'error', 'reason': reason}})
+                except Exception:
+                    logger.debug('callback raised after bridge shutdown', exc_info=True)
 
     # ------------------------------------------------ session persistence --
 
