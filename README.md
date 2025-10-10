@@ -2,6 +2,10 @@
 
 Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
 
+> [!NOTE]
+> Version of this package exactly matches codex-cli version it's compatible with (i.e. 1.36.0 plugin -> 0.36.0 codex).
+> To get one, you can download binary to your system from [codex releases](https://github.com/openai/codex/releases) page and set up this plugin's settings to point to that exact binary.
+
 ## Upgrade Notes
 
 - API token setting: This package expects your OpenAI API token in the `token` setting and exports it to the environment variable named by `env_key` (default: `OPENAI_API_KEY`). If you previously used another package with a different setting name, please add `"token": "sk-..."` to your Codex settings or set the corresponding environment variable.
