@@ -35,27 +35,13 @@ Palette.
 
 ### Installation
 
-1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
+1. **Download Separate Codex instance** (the plug-in talks to the CLI, it is **not** bundled) from [codex releases](https://github.com/openai/codex/releases) version of the codes that equal to this plugin second number (i.e. **0.36.0** as for now).
 
-   ```bash
-   npm i -g @openai/codex
-   ```
-
-   On Windows you can use
-
-   ```bash
-   winget install OpenAI.Codex
-   ```
-
-   By default the plug-in uses "which(codex)"
-
-If yours lives somewhere else, set the `codex_path` setting (see below). It
-accepts either a single string (e.g. `"codex.exe"` when Codex is installed natively
-on Windows) or an array of strings – e.g.:
+Point out the downloaded codex binary from within plugin settings:
 
 ```jsonc
 {
-  "codex_path": ["wsl", "-e", "codex"],
+  "codex_path": ["~/some_path/codex"],
 }
 ```
 
@@ -86,14 +72,9 @@ the commands and start chatting.
 ---
 
 ## Commands (⌘⇧P)
-
-• **Codex: Prompt** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
-
-• **Codex: Open Transcript** – open the conversation buffer in a normal tab.
-
-• **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and
-  invalidate the stored `session_id` so the next prompt starts a brand-new
-  session.
+- **Codex: Prompt** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
+- **Codex: Open Transcript** – open the conversation buffer in a normal tab.
+- **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and invalidate the stored `session_id` so the next prompt starts a brand-new session.
 
 ---
 
