@@ -25,7 +25,18 @@ def _package_name() -> str:
     """Return the Sublime package folder name for this plugin."""
     try:
         # commands.py lives in <package>/plugin/commands.py
-        return os.path.basename(os.path.dirname(os.path.dirname(__file__)))
+        package = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
+
+        # Sublime exposes resources via ``Packages/<name>`` even when the
+        # package is installed as ``<name>.sublime-package`` inside
+        # ``Installed Packages``.  When running from the packed archive, the
+        # filesystem path includes the ``.sublime-package`` suffix and we must
+        # strip it; otherwise Sublime looks for
+        # ``Packages/<name>.sublime-package`` which does not exist.
+        if package.endswith('.sublime-package'):
+            package = os.path.splitext(package)[0]
+
+        return package
     except Exception:
         # Fallback to the expected package name when installed per README
         return 'Codex'
