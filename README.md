@@ -3,7 +3,7 @@
 Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
 
 > [!NOTE]
-> Version of this package exactly matches codex-cli version it's compatible with (i.e. 1.36.0 plugin -> 0.36.0 codex).
+> Version of this package tracks the Codex CLI version it is tested with (for this release: plugin `1.104.0` with codex-cli `0.104.0`).
 > To get one, you can download binary to your system from [codex releases](https://github.com/openai/codex/releases) page and set up this plugin's settings to point to that exact binary.
 
 ## Upgrade Notes
@@ -11,9 +11,9 @@ Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime
 - API token setting: This package expects your OpenAI API token in the `token` setting and exports it to the environment variable named by `env_key` (default: `OPENAI_API_KEY`). If you previously used another package with a different setting name, please add `"token": "sk-..."` to your Codex settings or set the corresponding environment variable.
 
 - Markdown and folding: The transcript and input panels now use a bundled Markdown syntax for improved headings and section folding. You can auto‑fold sections by header via `fold_sections` in project or global Codex settings.
-The plug-in spins up a `codex proto` subprocess, shows the conversation in a
-Markdown panel and lets you execute three simple commands from the Command
-Palette.
+The plug-in spins up a `codex app-server` subprocess, shows the conversation in
+a Markdown panel, and integrates approvals/sandboxed execution directly in the
+Sublime UI.
 
 ---
 
@@ -35,27 +35,13 @@ Palette.
 
 ### Installation
 
-1. **Install the Codex CLI** (the plug-in talks to the CLI, it is **not** bundled).
+1. **Download Separate Codex instance** (the plug-in talks to the CLI, it is **not** bundled) from [codex releases](https://github.com/openai/codex/releases) matching this plugin release (for `1.104.0`, use codex-cli `0.104.0`).
 
-   ```bash
-   npm i -g @openai/codex
-   ```
-
-   On Windows you can use
-
-   ```bash
-   winget install OpenAI.Codex
-   ```
-
-   By default the plug-in uses "which(codex)"
-
-If yours lives somewhere else, set the `codex_path` setting (see below). It
-accepts either a single string (e.g. `"codex.exe"` when Codex is installed natively
-on Windows) or an array of strings – e.g.:
+Point out the downloaded codex binary from within plugin settings:
 
 ```jsonc
 {
-  "codex_path": ["wsl", "-e", "codex"],
+  "codex_path": ["~/some_path/codex"],
 }
 ```
 
@@ -86,14 +72,9 @@ the commands and start chatting.
 ---
 
 ## Commands (⌘⇧P)
-
-• **Codex: Prompt** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
-
-• **Codex: Open Transcript** – open the conversation buffer in a normal tab.
-
-• **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and
-  invalidate the stored `session_id` so the next prompt starts a brand-new
-  session.
+- **Codex: New Message** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
+- **Codex: Open Transcript Tab** – open the conversation buffer in a normal tab.
+- **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and invalidate the stored `session_id` so the next prompt starts a brand-new session.
 
 ---
 
@@ -137,61 +118,22 @@ section.  Example:
 
 ---
 
-## Writable paths passed to Codex
+## What is sent to Codex
 
-The plug-in constructs the `sandbox_policy.permissions` list for each session:
+The plugin launches `codex app-server` with CLI `--config` overrides derived
+from global/per-project Sublime settings, including:
 
-1. `/private/tmp`
-2. **`cwd`** – the first project folder (or the current working directory if
-   there is none)
-3. **All folders** listed in the Sublime project (visible in the sidebar)
-4. Any extra paths you add via `settings.codex.permissions`
+- `model`
+- `sandbox_mode`
+- `approval_policy`
+- `sandbox_workspace_write.network_access`
+- `sandbox_workspace_write.writable_roots`
 
-Those paths are sent to the CLI unchanged; Codex is free to read/write inside
-them depending on the selected `sandbox_mode`.
+If a value is not overridden by the plugin, Codex falls back to its normal
+global config (`~/.codex/config.toml`).
 
----
-
-## Default configuration sent to the CLI
-
-The first thing the bridge does is send a `configure_session` message:
-
-```jsonc
-{
-    "id": "<session_id>",
-    "op": {
-        "type": "configure_session",
-
-        // model / provider
-        "model":            "codex-mini-latest",
-        "approval_policy":  "on-failure",
-        "provider": {
-            "name":     "openai",
-            "base_url": "https://api.openai.com/v1",
-            "wire_api": "responses",
-            "env_key":  "OPENAI_API_KEY"
-        },
-
-        // sandbox
-        "sandbox_policy": {
-            "permissions": [
-                "disk-full-read-access",
-                "disk-write-cwd",
-                "disk-write-platform-global-temp-folder",
-                "disk-write-platform-user-temp-folder",
-                {
-                    "disk-write-folder": {"folder": "$HOME/.cache"} // for clangd cache
-                }
-            ],
-            "mode": "workspace-write"
-        },
-
-        "cwd": "<cwd>"
-    }
-}
-```
-
-All values can be overridden per-project as shown above.
+For `workspace-write`, project folders and optional `settings.codex.permissions`
+are propagated as writable roots.
 
 Enjoy hacking with Codex inside Sublime Text!  🚀
 

@@ -44,6 +44,12 @@
     // Suppress noisy or uninteresting event types from the transcript.
     // Example: ["agent_reasoning_delta"]. You can also specify a string.
     "suppress_events": [
+        "mcp_startup_update",
+        "mcp_startup_complete",
+        "item_started",
+        "item_completed",
+        "agent_message_content_delta",
+        "reasoning_content_delta",
         "agent_reasoning_delta",
         "agent_reasoning_section_break",
         "agent_message_delta",

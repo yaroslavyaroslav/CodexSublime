@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 import os
+from datetime import datetime
 
 import sublime  # type: ignore
 import sublime_plugin  # type: ignore
@@ -19,6 +20,47 @@ logger = logging.getLogger(__name__)
 
 
 TRANSCRIPT_VIEW_FLAG = 'codex_is_transcript'
+HIDDEN_TRANSCRIPT_TYPES = {
+    # Infra/bootstrap noise from app-server runtime.
+    'mcp_startup_update',
+    'mcp_startup_complete',
+    # Item lifecycle bookkeeping; usually duplicates more useful events.
+    'item_started',
+    'item_completed',
+    # Streaming deltas are noisy in transcript; final agent_message is rendered.
+    'agent_message_content_delta',
+    'agent_message_delta',
+    'reasoning_content_delta',
+    # The plugin already echoes the user prompt right after submit.
+    'user_message',
+}
+
+
+def _is_debug_logging_enabled() -> bool:
+    try:
+        level = sublime.load_settings('Codex.sublime-settings').get('log_level', '')
+        return isinstance(level, str) and level.lower() == 'debug'
+    except Exception:
+        return False
+
+
+def _cmd_trace(message: str, *args: object) -> None:
+    if not _is_debug_logging_enabled():
+        return
+    try:
+        text = message % args if args else message
+    except Exception:
+        text = f'{message} {args!r}'
+    line = f'[{datetime.utcnow().isoformat()}Z] {text}\n'
+    for path in ('/tmp/codex_sublime_commands.log', '/tmp/codex_sublime_main.log'):
+        try:
+            with open(path, 'a', encoding='utf-8') as fh:
+                fh.write(line)
+        except Exception:
+            pass
+
+
+_cmd_trace('commands module imported')
 
 
 def _package_name() -> str:
@@ -172,6 +214,9 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
+    if msg_type in HIDDEN_TRANSCRIPT_TYPES:
+        _cmd_trace('suppress transcript msg_type=%s', msg_type)
+        return
 
     body = ''
     header_title_for_fold: str | None = None  # extracted header label for auto-folding
@@ -244,6 +289,19 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
                         'decision': decision,
                     },
                 },
+            )
+            # Mirror the user's decision in transcript so rejected/cancelled
+            # approvals are explicitly visible.
+            _display_assistant_response(
+                _window,
+                '',
+                {
+                    'msg': {
+                        'type': 'exec_approval_result',
+                        'decision': decision,
+                    }
+                },
+                session_id,
             )
 
         # Show the quick-panel *after* we appended the request to the
@@ -472,6 +530,17 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
                     },
                 },
             )
+            _display_assistant_response(
+                _window,
+                '',
+                {
+                    'msg': {
+                        'type': 'apply_patch_approval_result',
+                        'decision': decision,
+                    }
+                },
+                session_id,
+            )
 
         window.show_quick_panel(quick_panel_items, _on_done)
 
@@ -498,6 +567,18 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
         if stderr:
             body += f'`stderr`:\n```\n{stderr}\n```\n\n'
+
+    elif msg_type == 'exec_approval_result':
+        header = '### exec_approval_result\n\n'
+        header_title_for_fold = 'exec_approval_result'
+        decision = str(msg.get('decision', 'unknown'))
+        body = f'`decision`: `{decision}`\n\n'
+
+    elif msg_type == 'apply_patch_approval_result':
+        header = '### apply_patch_approval_result\n\n'
+        header_title_for_fold = 'apply_patch_approval_result'
+        decision = str(msg.get('decision', 'unknown'))
+        body = f'`decision`: `{decision}`\n\n'
 
     else:
         header = (
@@ -668,8 +749,10 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
     INPUT_PANEL_NAME = 'codex_input'
 
     def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        _cmd_trace('prompt command entered')
         window = self.view.window()
         if window is None:
+            _cmd_trace('prompt aborted: no window')
             return
 
         panel = window.create_output_panel(self.INPUT_PANEL_NAME)
@@ -691,6 +774,7 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 
         window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
         window.focus_view(panel)
+        _cmd_trace('input panel shown and focused')
 
         # Ensure the panel is scrolled to the very end so the caret is visible
         # even if we pre-filled a long selection.
@@ -745,23 +829,45 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
     INPUT_PANEL_NAME = 'codex_input'
 
     def run(self) -> None:  # noqa: D401 – ST API shape
+        _cmd_trace('submit command entered')
+        session_id: str = ''  # used in error rendering before project settings load
         panel_view = self.window.find_output_panel(self.INPUT_PANEL_NAME)
         if panel_view is None:
+            _cmd_trace('submit aborted: panel missing')
             sublime.status_message('no input panel open')
             return
 
         prompt = panel_view.substr(sublime.Region(0, panel_view.size())).strip()
         if not prompt:
+            _cmd_trace('submit aborted: empty prompt')
             sublime.status_message('prompt is empty')
             return
 
+        _cmd_trace('submit prompt chars=%d', len(prompt))
         self.window.run_command('hide_panel')
 
-        bridge = get_bridge(self.window)
+        try:
+            _cmd_trace('creating bridge')
+            bridge = get_bridge(self.window)
+            _cmd_trace('bridge created type=%s', type(bridge).__name__)
+        except Exception as exc:
+            _cmd_trace('bridge creation failed error=%s', exc)
+            _display_assistant_response(
+                self.window,
+                prompt,
+                {
+                    'msg': {
+                        'type': 'error',
+                        'text': f'Failed to initialize Codex bridge: {exc}',
+                    }
+                },
+                session_id,
+            )
+            logger.exception('Failed to create Codex bridge')
+            return
         project_data = self.window.project_data() or {}
         settings_block = project_data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
-        session_id: str = None  # type: ignore
         if 'session_id' in codex_cfg:
             session_id = codex_cfg['session_id']
         msg_id = str(uuid.uuid4())
@@ -853,6 +959,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             },
             cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event, session_id),
         )
+        _cmd_trace('bridge.send dispatched')
 
         # Show the user's prompt immediately.
         _display_assistant_response(
@@ -866,6 +973,7 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             },
             session_id,
         )
+        _cmd_trace('user prompt echoed to transcript')
 
 
 # ---------------------------------------------------------------------------
