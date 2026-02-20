@@ -8,8 +8,6 @@ Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime
 
 ## Upgrade Notes
 
-- API token setting: This package expects your OpenAI API token in the `token` setting and exports it to the environment variable named by `env_key` (default: `OPENAI_API_KEY`). If you previously used another package with a different setting name, please add `"token": "sk-..."` to your Codex settings or set the corresponding environment variable.
-
 - Markdown and folding: The transcript and input panels now use a bundled Markdown syntax for improved headings and section folding. You can auto‑fold sections by header via `fold_sections` in project or global Codex settings.
 The plug-in spins up a `codex app-server` subprocess, shows the conversation in
 a Markdown panel, and integrates approvals/sandboxed execution directly in the
@@ -53,18 +51,7 @@ Point out the downloaded codex binary from within plugin settings:
         Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
 
 
-3. Optionally create an OpenAI token and tell the plug-in about it.
-
-   *Open the menu* → **Preferences › Package Settings › Codex** and put your
-   key into the generated `Codex.sublime-settings` file:
-
-   ```jsonc
-   {
-       "token": "sk-…"
-       // exported to this env var for the Codex CLI
-       "env_key": "OPENAI_API_KEY"
-   }
-   ```
+3. Sign in with Codex CLI (`codex login`) if you are not already authenticated.
 
 That’s it – hit <kbd>⌘⇧P</kbd> / <kbd>Ctrl ⇧ P</kbd>, type *Codex*, select one of
 the commands and start chatting.
@@ -190,4 +177,4 @@ Notes
   correct section.
 
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
-[^2]: If both requirements are met (1) `codex` is installed and (2) token in settings is provided.
+[^2]: If `codex` is installed and authenticated (for example via `codex login`).

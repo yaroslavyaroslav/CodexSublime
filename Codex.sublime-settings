@@ -48,7 +48,6 @@
         "mcp_startup_complete",
         "item_started",
         "item_completed",
-        "agent_message_content_delta",
         "reasoning_content_delta",
         "agent_reasoning_delta",
         "agent_reasoning_section_break",
