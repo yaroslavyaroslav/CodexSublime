@@ -27,13 +27,13 @@ HIDDEN_TRANSCRIPT_TYPES = {
     # Item lifecycle bookkeeping; usually duplicates more useful events.
     'item_started',
     'item_completed',
-    # Streaming deltas are noisy in transcript; final agent_message is rendered.
-    'agent_message_content_delta',
+    # Streaming deltas are noisy in transcript unless explicitly rendered.
     'agent_message_delta',
     'reasoning_content_delta',
     # The plugin already echoes the user prompt right after submit.
     'user_message',
 }
+STREAMING_AGENT_BLOCKS: dict[tuple[int, str], dict[str, str]] = {}
 
 
 def _is_debug_logging_enabled() -> bool:
@@ -214,6 +214,29 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
+
+    stream_key = _agent_stream_key(window, event, msg)
+    if msg_type == 'agent_message_content_delta':
+        _append_agent_message_delta(window, target_view, is_panel, stream_key, msg)
+        return
+
+    if msg_type == 'agent_message' and stream_key is not None:
+        streaming_state = STREAMING_AGENT_BLOCKS.get(stream_key)
+        if streaming_state is not None:
+            streamed = streaming_state.get('text', '')
+            final_text = _extract_text(msg) or ''
+            if not final_text or final_text.startswith(streamed):
+                suffix = final_text[len(streamed):] if final_text else ''
+                if suffix:
+                    target_view.run_command('append', {'characters': suffix, 'force': True})
+                target_view.run_command('append', {'characters': '\n\n', 'force': True})
+                STREAMING_AGENT_BLOCKS.pop(stream_key, None)
+                target_view.set_read_only(True)
+                if is_panel:
+                    window.run_command('show_panel', {'panel': 'output.codex'})
+                return
+            STREAMING_AGENT_BLOCKS.pop(stream_key, None)
+
     if msg_type in HIDDEN_TRANSCRIPT_TYPES:
         _cmd_trace('suppress transcript msg_type=%s', msg_type)
         return
@@ -734,6 +757,67 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     # Restore read-only
     target_view.set_read_only(True)
 
+    if is_panel:
+        window.run_command('show_panel', {'panel': 'output.codex'})
+
+
+def _agent_stream_key(window: sublime.Window, event: dict, msg: dict) -> tuple[int, str] | None:  # type: ignore[name-defined]
+    raw = (
+        event.get('id')
+        or msg.get('turn_id')
+        or msg.get('turnId')
+        or msg.get('item_id')
+        or msg.get('itemId')
+    )
+    if raw is None:
+        return None
+    try:
+        return (window.id(), str(raw))
+    except Exception:
+        return None
+
+
+def _append_agent_message_delta(
+    window: sublime.Window,  # type: ignore[name-defined]
+    target_view: sublime.View,  # type: ignore[name-defined]
+    is_panel: bool,
+    stream_key: tuple[int, str] | None,
+    msg: dict,
+) -> None:
+    delta = msg.get('delta')
+    if not isinstance(delta, str) or not delta:
+        target_view.set_read_only(True)
+        return
+
+    if stream_key is None:
+        target_view.run_command('append', {'characters': delta, 'force': True})
+        target_view.set_read_only(True)
+        if is_panel:
+            window.run_command('show_panel', {'panel': 'output.codex'})
+        return
+
+    state = STREAMING_AGENT_BLOCKS.get(stream_key)
+    if state is None:
+        state = {'text': '', 'started': ''}
+        STREAMING_AGENT_BLOCKS[stream_key] = state
+
+    if not state.get('started'):
+        pre_size = target_view.size()
+        to_append = '## agent_message\n\n'
+        try:
+            if pre_size > 0:
+                last_char = target_view.substr(sublime.Region(pre_size - 1, pre_size))
+                if last_char != '\n':
+                    to_append = '\n' + to_append
+        except Exception:
+            pass
+        target_view.run_command('append', {'characters': to_append, 'force': True})
+        state['started'] = '1'
+
+    state['text'] = state.get('text', '') + delta
+    target_view.run_command('append', {'characters': delta, 'force': True})
+    target_view.show(target_view.size())
+    target_view.set_read_only(True)
     if is_panel:
         window.run_command('show_panel', {'panel': 'output.codex'})
 
