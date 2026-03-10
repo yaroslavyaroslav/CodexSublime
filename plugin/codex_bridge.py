@@ -11,6 +11,7 @@ import signal
 import subprocess
 import threading
 import uuid
+from collections import deque
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -36,6 +37,42 @@ def _project_settings() -> dict:
     except Exception:
         pass
     return {}
+
+
+def _find_workspace_root(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    current = os.path.abspath(path)
+    if not os.path.isdir(current):
+        current = os.path.dirname(current)
+
+    while True:
+        if os.path.exists(os.path.join(current, '.git')):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def _best_workspace_cwd(project_folders: list[str], active_file_dir: Optional[str]) -> str:
+    if active_file_dir:
+        active_dir = os.path.abspath(active_file_dir)
+        for folder in project_folders:
+            folder_abs = os.path.abspath(folder)
+            if active_dir == folder_abs or active_dir.startswith(folder_abs + os.sep):
+                return folder_abs
+
+        git_root = _find_workspace_root(active_dir)
+        if git_root:
+            return git_root
+
+        return active_dir
+
+    if project_folders:
+        return os.path.abspath(project_folders[0])
+
+    return os.path.abspath(os.getcwd())
 
 
 def kill_process_tree(root_pid: int) -> None:  # pragma: no cover
@@ -118,12 +155,7 @@ class _CodexBridge:
         except Exception:
             active_file_dir = None
 
-        if active_file_dir:
-            self._cwd = active_file_dir
-        elif self._project_folders:
-            self._cwd = os.path.abspath(self._project_folders[0])
-        else:
-            self._cwd = os.path.abspath(os.getcwd())
+        self._cwd = _best_workspace_cwd(self._project_folders, active_file_dir)
 
         env = os.environ.copy()
         if token and token != '<your-token>':
@@ -207,6 +239,9 @@ class _CodexBridge:
         self._last_msg_id: Optional[str] = None
         self._last_cb: Optional[Callable[[dict[str, Any]], None]] = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
+        self._protocol = 'legacy'
+        self._bootstrap_error: Optional[str] = None
+        self._recent_stderr: deque[str] = deque(maxlen=20)
         self._ready = threading.Event()
         self._stopped = threading.Event()
         self._bootstrap_failed = threading.Event()
@@ -236,9 +271,14 @@ class _CodexBridge:
             kill_process_tree(self.proc.pid)
 
     def send(self, obj: Dict[str, Any], cb: Optional[Callable[[dict[str, Any]], None]] = None) -> None:
-        if self._stopped.is_set() or self._bootstrap_failed.is_set():
+        if self._bootstrap_failed.is_set():
             if cb is not None:
-                cb({'msg': {'type': 'error', 'reason': 'bridge_stopped', 'message': 'Codex bridge is not running'}})
+                cb({'msg': self._error_payload(reason='bridge_not_ready')})
+            return
+
+        if self._stopped.is_set():
+            if cb is not None:
+                cb({'msg': self._error_payload(reason='bridge_stopped', default_message='Codex bridge is not running')})
             return
 
         if not self._ready.is_set():
@@ -274,42 +314,17 @@ class _CodexBridge:
             self._send_json({'method': 'initialized'})
             self._trace('bootstrap: initialized sent')
 
-            conversation_id: Optional[str] = None
-            if self._session_id:
-                try:
-                    self._trace('bootstrap: resumeConversation start session_id=%s', self._session_id)
-                    resumed = self._send_request_sync(
-                        'resumeConversation',
-                        {'conversationId': self._session_id},
-                        timeout=20.0,
-                    )
-                    conversation_id = resumed.get('conversationId')
-                    self._trace('bootstrap: resumeConversation ok conversation_id=%s', conversation_id)
-                except Exception:
-                    logger.debug('resumeConversation failed for %s; creating a new conversation', self._session_id)
-                    self._trace('bootstrap: resumeConversation failed for session_id=%s', self._session_id)
-
-            if not conversation_id:
-                self._trace('bootstrap: newConversation start')
-                created = self._send_request_sync('newConversation', {}, timeout=20.0)
-                conversation_id = created.get('conversationId')
-                self._trace('bootstrap: newConversation ok conversation_id=%s', conversation_id)
-
-            if not isinstance(conversation_id, str) or not conversation_id:
-                raise RuntimeError('conversationId missing in app-server response')
+            conversation_id = self._bootstrap_modern_protocol()
+            if conversation_id:
+                self._protocol = 'threads'
+                self._trace('bootstrap: using threads protocol conversation_id=%s', conversation_id)
+            else:
+                conversation_id = self._bootstrap_legacy_protocol()
+                self._protocol = 'legacy'
+                self._trace('bootstrap: using legacy protocol conversation_id=%s', conversation_id)
 
             self._session_id = conversation_id
             self._persist_session_id(self._window, conversation_id)
-
-            self._send_request_sync(
-                'addConversationListener',
-                {
-                    'conversationId': conversation_id,
-                    'experimentalRawEvents': False,
-                },
-                timeout=20.0,
-            )
-            self._trace('bootstrap: addConversationListener ok conversation_id=%s', conversation_id)
 
             self._ready.set()
             self._flush_pending()
@@ -317,6 +332,7 @@ class _CodexBridge:
         except Exception as exc:
             logger.exception('Failed to bootstrap app-server bridge: %s', exc)
             self._trace('bootstrap: failed error=%s', exc)
+            self._bootstrap_error = self._format_bootstrap_error(exc)
             self._bootstrap_failed.set()
             self._stopped.set()
             self._discard_pending(reason='bridge_not_ready', log_error=True)
@@ -385,6 +401,104 @@ class _CodexBridge:
             except BrokenPipeError:
                 logger.error('Broken pipe while sending data – process dead?')
 
+    def _bootstrap_modern_protocol(self) -> Optional[str]:
+        conversation_id: Optional[str] = None
+        modern_supported = True
+
+        if self._session_id:
+            try:
+                self._trace('bootstrap: thread/resume start session_id=%s', self._session_id)
+                resumed = self._send_request_sync(
+                    'thread/resume',
+                    {'threadId': self._session_id},
+                    timeout=20.0,
+                )
+                conversation_id = self._extract_thread_id(resumed)
+                self._trace('bootstrap: thread/resume ok conversation_id=%s', conversation_id)
+            except Exception as exc:
+                if self._is_unsupported_method_error(exc, 'thread/resume'):
+                    modern_supported = False
+                    self._trace('bootstrap: thread/resume unsupported')
+                else:
+                    logger.debug('thread/resume failed for %s; creating a new thread', self._session_id)
+                    self._trace('bootstrap: thread/resume failed for session_id=%s', self._session_id)
+
+        if modern_supported and not conversation_id:
+            try:
+                self._trace('bootstrap: thread/start start')
+                created = self._send_request_sync('thread/start', {}, timeout=20.0)
+                conversation_id = self._extract_thread_id(created)
+                self._trace('bootstrap: thread/start ok conversation_id=%s', conversation_id)
+            except Exception as exc:
+                if self._is_unsupported_method_error(exc, 'thread/start'):
+                    modern_supported = False
+                    self._trace('bootstrap: thread/start unsupported')
+                else:
+                    raise
+
+        if not modern_supported:
+            return None
+        if not isinstance(conversation_id, str) or not conversation_id:
+            raise RuntimeError('threadId missing in app-server response')
+        return conversation_id
+
+    def _bootstrap_legacy_protocol(self) -> str:
+        conversation_id: Optional[str] = None
+        if self._session_id:
+            try:
+                self._trace('bootstrap: resumeConversation start session_id=%s', self._session_id)
+                resumed = self._send_request_sync(
+                    'resumeConversation',
+                    {'conversationId': self._session_id},
+                    timeout=20.0,
+                )
+                conversation_id = resumed.get('conversationId')
+                self._trace('bootstrap: resumeConversation ok conversation_id=%s', conversation_id)
+            except Exception:
+                logger.debug('resumeConversation failed for %s; creating a new conversation', self._session_id)
+                self._trace('bootstrap: resumeConversation failed for session_id=%s', self._session_id)
+
+        if not conversation_id:
+            self._trace('bootstrap: newConversation start')
+            created = self._send_request_sync('newConversation', {}, timeout=20.0)
+            conversation_id = created.get('conversationId')
+            self._trace('bootstrap: newConversation ok conversation_id=%s', conversation_id)
+
+        if not isinstance(conversation_id, str) or not conversation_id:
+            raise RuntimeError('conversationId missing in app-server response')
+
+        self._send_request_sync(
+            'addConversationListener',
+            {
+                'conversationId': conversation_id,
+                'experimentalRawEvents': False,
+            },
+            timeout=20.0,
+        )
+        self._trace('bootstrap: addConversationListener ok conversation_id=%s', conversation_id)
+        return conversation_id
+
+    @staticmethod
+    def _extract_thread_id(result: dict[str, Any]) -> Optional[str]:
+        thread = result.get('thread')
+        if isinstance(thread, dict):
+            thread_id = thread.get('id')
+            if isinstance(thread_id, str) and thread_id:
+                return thread_id
+        thread_id = result.get('threadId')
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+        return None
+
+    @staticmethod
+    def _is_unsupported_method_error(exc: Exception, method: str) -> bool:
+        text = str(exc)
+        return (
+            f'unknown variant `{method}`' in text
+            or f'Unsupported server request: {method}' in text
+            or 'Method not found' in text
+        )
+
     def _send_rpc_response(self, request_id: Any, result: dict[str, Any]) -> None:
         self._send_json({'id': request_id, 'result': result})
 
@@ -451,6 +565,7 @@ class _CodexBridge:
             raw = line.rstrip()
             if not raw:
                 continue
+            self._recent_stderr.append(raw)
             logger.error('[codex stderr] %s', raw)
             self._trace('codex stderr: %s', raw)
 
@@ -633,16 +748,28 @@ class _CodexBridge:
                 self._last_msg_id = msg_id
                 self._last_cb = cb
 
-            items = self._normalize_input_items(op.get('items'))
-            self._send_request_async(
-                'sendUserMessage',
-                {
-                    'conversationId': self._session_id,
-                    'items': items,
-                },
-                on_error=lambda _err, _msg_id=msg_id: self._handle_user_input_request_error(_msg_id, _err),
-            )
-            self._trace('user_input queued to sendUserMessage msg_id=%s', msg_id)
+            if self._protocol == 'threads':
+                items = self._normalize_turn_input_items(op.get('items'))
+                self._send_request_async(
+                    'turn/start',
+                    {
+                        'threadId': self._session_id,
+                        'input': items,
+                    },
+                    on_error=lambda _err, _msg_id=msg_id: self._handle_user_input_request_error(_msg_id, _err),
+                )
+                self._trace('user_input queued to turn/start msg_id=%s', msg_id)
+            else:
+                items = self._normalize_input_items(op.get('items'))
+                self._send_request_async(
+                    'sendUserMessage',
+                    {
+                        'conversationId': self._session_id,
+                        'items': items,
+                    },
+                    on_error=lambda _err, _msg_id=msg_id: self._handle_user_input_request_error(_msg_id, _err),
+                )
+                self._trace('user_input queued to sendUserMessage msg_id=%s', msg_id)
             return
 
         if op_type in {'exec_approval', 'patch_approval'}:
@@ -726,6 +853,26 @@ class _CodexBridge:
                     out.append({'type': 'localImage', 'data': {'path': str(path)}})
         return out
 
+    def _normalize_turn_input_items(self, raw_items: Any) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        items = raw_items if isinstance(raw_items, list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get('type')
+            if item_type == 'text':
+                text = item.get('text', '')
+                out.append({'type': 'text', 'text': str(text)})
+            elif item_type == 'image':
+                image_url = item.get('image_url')
+                if image_url:
+                    out.append({'type': 'image', 'imageUrl': str(image_url)})
+            elif item_type in {'localImage', 'local_image'}:
+                path = item.get('path')
+                if path:
+                    out.append({'type': 'localImage', 'path': str(path)})
+        return out
+
     def _should_suppress(self, msg_type: Any) -> bool:
         project_conf = _project_settings()
         if 'suppress_events' in project_conf:
@@ -783,9 +930,33 @@ class _CodexBridge:
         for _, queued_cb in pending:
             if queued_cb is not None:
                 try:
-                    queued_cb({'msg': {'type': 'error', 'reason': reason}})
+                    queued_cb({'msg': self._error_payload(reason=reason)})
                 except Exception:
                     logger.debug('callback raised after bridge shutdown', exc_info=True)
+
+    def _error_payload(self, *, reason: str, default_message: Optional[str] = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            'type': 'error',
+            'reason': reason,
+        }
+        message = self._bootstrap_error or default_message
+        if message:
+            payload['message'] = message
+        if self._recent_stderr:
+            payload['stderr'] = '\n'.join(self._recent_stderr)
+        payload['protocol'] = self._protocol
+        return payload
+
+    def _format_bootstrap_error(self, exc: Exception) -> str:
+        detail = str(exc)
+        if self._is_unsupported_method_error(exc, 'newConversation') or self._is_unsupported_method_error(
+            exc, 'resumeConversation'
+        ):
+            return (
+                'Codex app-server rejected the legacy conversation bootstrap methods. '
+                'The plugin is speaking an older protocol than the installed codex-cli.'
+            )
+        return f'Failed to bootstrap Codex app-server: {detail}'
 
     @staticmethod
     def _ensure_session_id(window: Optional['sublime.Window']) -> str:  # type: ignore[name-defined]

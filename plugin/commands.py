@@ -603,6 +603,25 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         decision = str(msg.get('decision', 'unknown'))
         body = f'`decision`: `{decision}`\n\n'
 
+    elif msg_type == 'error':
+        header = '### Error\n\n'
+        header_title_for_fold = 'error'
+        reason = msg.get('reason')
+        message = msg.get('message') or msg.get('text')
+        protocol = msg.get('protocol')
+        stderr = msg.get('stderr')
+
+        if reason:
+            body += f'`reason`: `{reason}`\n\n'
+        if protocol:
+            body += f'`protocol`: `{protocol}`\n\n'
+        if message:
+            body += f'{message}\n\n'
+        if stderr:
+            body += f'`stderr`:\n```\n{stderr}\n```\n\n'
+        if not body:
+            body = '_No error details were provided._\n\n'
+
     else:
         header = (
             f'## {msg_type}\n\n' if msg_type in ['user_input', 'agent_message'] else f'### {msg_type}\n\n'
