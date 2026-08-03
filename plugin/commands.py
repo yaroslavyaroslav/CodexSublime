@@ -1,12 +1,10 @@
 """Sublime Text commands and panel workflow for Codex."""
 
-from __future__ import annotations
-
 import json
 import logging
-import uuid
 import os
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime
 
 import sublime  # type: ignore
 import sublime_plugin  # type: ignore
@@ -51,7 +49,7 @@ def _cmd_trace(message: str, *args: object) -> None:
         text = message % args if args else message
     except Exception:
         text = f'{message} {args!r}'
-    line = f'[{datetime.utcnow().isoformat()}Z] {text}\n'
+    line = f'[{datetime.now(UTC).isoformat()}] {text}\n'
     for path in ('/tmp/codex_sublime_commands.log', '/tmp/codex_sublime_main.log'):
         try:
             with open(path, 'a', encoding='utf-8') as fh:
@@ -440,8 +438,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             # Arguments might be a raw string; try to parse JSON-looking text.
             try:
-                import ast  # local import to avoid top-level cost
-
                 if isinstance(arguments, str):
                     stripped = arguments.strip()
                     if stripped.startswith('{') or stripped.startswith('['):
@@ -974,83 +970,6 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
         if 'session_id' in codex_cfg:
             session_id = codex_cfg['session_id']
         msg_id = str(uuid.uuid4())
-
-        # Determine cwd and sandbox/approval for this turn and use `user_turn`
-        # so the active turn inherits correct writable roots under Codex ≥0.22.
-        window = self.window
-        folders = window.folders() if window else []
-
-        # Prefer the project folder containing the active file as cwd.
-        active_file = None
-        try:
-            av = window.active_view() if window else None
-            active_file = av.file_name() if av else None
-        except Exception:
-            active_file = None
-
-        def _best_cwd(folders_list: list[str], active_path: str | None) -> str:
-            if active_path:
-                for folder in folders_list:
-                    try:
-                        ap = os.path.abspath(active_path)
-                        fp = os.path.abspath(folder)
-                        if ap.startswith(fp + os.sep) or ap == fp:
-                            return fp
-                    except Exception:
-                        continue
-            if folders_list:
-                return os.path.abspath(folders_list[0])
-            return os.path.abspath(os.getcwd())
-
-        cwd = _best_cwd(folders, active_file)
-
-        global_settings = sublime.load_settings('Codex.sublime-settings')
-        approval_policy = (
-            codex_cfg.get('approval_policy')
-            or global_settings.get('approval_policy')
-            or 'on-failure'
-        )
-
-        # Build sandbox_policy compatible with Codex protocol
-        sandbox_mode = codex_cfg.get('sandbox_mode') or global_settings.get('sandbox_mode') or 'workspace-write'
-        allow_network = bool(codex_cfg.get('sandbox_network_access') or global_settings.get('sandbox_network_access') or False)
-
-        extra_perms = codex_cfg.get('permissions', [])
-        if isinstance(extra_perms, str):
-            extra_perms = [extra_perms]
-        extra_perms = [os.path.abspath(p) for p in extra_perms if isinstance(p, str)]
-
-        writable_roots: list[str] = []
-        for p in folders + extra_perms:
-            ap = os.path.abspath(p)
-            if ap not in writable_roots and ap != cwd:
-                writable_roots.append(ap)
-
-        if sandbox_mode == 'workspace-write':
-            sandbox_policy = {
-                'mode': 'workspace-write',
-                'writable_roots': writable_roots,
-                'network_access': allow_network,
-            }
-        elif sandbox_mode == 'read-only':
-            sandbox_policy = {'mode': 'read-only'}
-        elif sandbox_mode == 'danger-full-access':
-            sandbox_policy = {'mode': 'danger-full-access'}
-        else:
-            sandbox_policy = {'mode': 'read-only'}
-
-        # Determine model + reasoning settings required by `user_turn`.
-        model = codex_cfg.get('model') or global_settings.get('model') or 'gpt-5'
-        reasoning_effort = (
-            codex_cfg.get('model_reasoning_effort')
-            or global_settings.get('model_reasoning_effort')
-            or 'medium'
-        )
-        reasoning_summary = (
-            codex_cfg.get('model_reasoning_summary')
-            or global_settings.get('model_reasoning_summary')
-            or 'detailed'
-        )
 
         bridge.send(
             {
