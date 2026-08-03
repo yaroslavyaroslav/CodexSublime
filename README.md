@@ -3,7 +3,7 @@
 Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
 
 > [!NOTE]
-> Version of this package tracks the Codex CLI version it is tested with (for this release: plugin `1.104.0` with codex-cli `0.104.0`).
+> Version of this package tracks the Codex CLI version it is tested with (for this release: plugin `1.146.0` with codex-cli `0.146.0`).
 > To get one, you can download binary to your system from [codex releases](https://github.com/openai/codex/releases) page and set up this plugin's settings to point to that exact binary.
 
 ## Upgrade Notes
@@ -33,7 +33,7 @@ Sublime UI.
 
 ### Installation
 
-1. **Download Separate Codex instance** (the plug-in talks to the CLI, it is **not** bundled) from [codex releases](https://github.com/openai/codex/releases) matching this plugin release (for `1.104.0`, use codex-cli `0.104.0`).
+1. **Download Separate Codex instance** (the plug-in talks to the CLI, it is **not** bundled) from [codex releases](https://github.com/openai/codex/releases) matching this plugin release (for `1.146.0`, use codex-cli `0.146.0`).
 
 Point out the downloaded codex binary from within plugin settings:
 
@@ -80,7 +80,8 @@ section.  Example:
             "session_id": null,
 
             // model & provider options
-            "model":            "o3",
+            // leave empty to use the model selected by your Codex account
+            "model":            "",
             "provider_name":    "openai",
             "base_url":         "https://api.openai.com/v1",
             "wire_api":         "responses",

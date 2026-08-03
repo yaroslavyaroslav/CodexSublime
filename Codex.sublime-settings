@@ -14,8 +14,9 @@
     // Leave it alone if you authenticated "codex" with your account.
     "token": "<your-token>",
 
-    // Provider configuration (can be overridden per-project in .sublime-project → settings.codex)
-    "model": "gpt-5",
+    // Optional model override (can be set per-project in .sublime-project → settings.codex).
+    // Leave empty to use the model selected by the authenticated Codex account.
+    "model": "",
     "provider_name": "openai",
     "base_url": "https://api.openai.com/v1",
     // Wire protocol used to talk to the provider (e.g. "responses").

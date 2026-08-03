@@ -239,6 +239,7 @@ class _CodexBridge:
         self._last_msg_id: Optional[str] = None
         self._last_cb: Optional[Callable[[dict[str, Any]], None]] = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
+        self._reported_v2_turn_errors: set[str] = set()
         self._protocol = 'legacy'
         self._bootstrap_error: Optional[str] = None
         self._recent_stderr: deque[str] = deque(maxlen=20)
@@ -574,9 +575,11 @@ class _CodexBridge:
         params = packet.get('params')
         if not isinstance(method, str):
             return
-        if not method.startswith('codex/event/'):
-            return
         if not isinstance(params, dict):
+            return
+
+        if not method.startswith('codex/event/'):
+            self._handle_v2_notification(method, params)
             return
 
         event = dict(params)
@@ -597,6 +600,189 @@ class _CodexBridge:
             return
         self._trace('event dispatch msg_type=%s id=%s', msg_type, event.get('id'))
         self._dispatch_event(event)
+
+    def _handle_v2_notification(self, method: str, params: dict[str, Any]) -> None:
+        event: Optional[dict[str, Any]] = None
+
+        if method == 'item/agentMessage/delta':
+            item_id = str(params.get('itemId') or '')
+            delta = params.get('delta')
+            if item_id and isinstance(delta, str) and delta:
+                event = {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'agent_message_content_delta',
+                        'delta': delta,
+                        'itemId': item_id,
+                    },
+                }
+
+        elif method == 'item/started':
+            event = self._adapt_v2_item_event(params.get('item'), completed=False)
+
+        elif method == 'item/completed':
+            event = self._adapt_v2_item_event(params.get('item'), completed=True)
+
+        elif method == 'error':
+            turn_id = str(params.get('turnId') or '')
+            if turn_id:
+                self._reported_v2_turn_errors.add(turn_id)
+            event = self._adapt_v2_error(params.get('error'), turn_id)
+
+        elif method == 'turn/completed':
+            turn = params.get('turn')
+            if not isinstance(turn, dict):
+                return
+
+            turn_id = str(turn.get('id') or '')
+            error = turn.get('error')
+            if isinstance(error, dict) and turn_id not in self._reported_v2_turn_errors:
+                error_event = self._adapt_v2_error(error, turn_id)
+                if error_event is not None:
+                    self._dispatch_event(error_event)
+
+            self._reported_v2_turn_errors.discard(turn_id)
+            task_complete = {
+                'id': turn_id,
+                'msg': {
+                    'type': 'task_complete',
+                    'last_agent_message': self._last_agent_message(turn),
+                },
+            }
+            if self._should_suppress('task_complete'):
+                self._complete_active_turn()
+            else:
+                self._dispatch_event(task_complete)
+            return
+
+        if event is None:
+            return
+
+        msg = event.get('msg', {})
+        msg_type = msg.get('type') if isinstance(msg, dict) else None
+        if self._should_suppress(msg_type):
+            self._trace('v2 event suppressed method=%s msg_type=%s', method, msg_type)
+            return
+        self._trace('v2 event dispatch method=%s msg_type=%s id=%s', method, msg_type, event.get('id'))
+        self._dispatch_event(event)
+
+    def _adapt_v2_item_event(self, raw_item: Any, *, completed: bool) -> Optional[dict[str, Any]]:
+        if not isinstance(raw_item, dict):
+            return None
+
+        item = raw_item
+        item_id = str(item.get('id') or '')
+        item_type = item.get('type')
+
+        if item_type == 'agentMessage':
+            if not completed:
+                return None
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'agent_message',
+                    'text': str(item.get('text') or ''),
+                    'itemId': item_id,
+                },
+            }
+
+        if item_type == 'commandExecution':
+            if completed:
+                return {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'exec_command_end',
+                        'exit_code': item.get('exitCode'),
+                        'stdout': str(item.get('aggregatedOutput') or ''),
+                        'stderr': '',
+                    },
+                }
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'exec_command_begin',
+                    'command': [str(item.get('command') or '')],
+                    'cwd': item.get('cwd'),
+                },
+            }
+
+        if item_type == 'fileChange':
+            changes = item.get('changes') or []
+            if completed:
+                return {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'patch_apply_end',
+                        'success': item.get('status') == 'completed',
+                        'changes': changes,
+                    },
+                }
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'patch_apply_begin',
+                    'auto_approved': False,
+                    'changes': changes,
+                },
+            }
+
+        if item_type == 'mcpToolCall':
+            if completed:
+                result = {'Err': item.get('error')} if item.get('error') else {'Ok': item.get('result') or {}}
+                return {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'mcp_tool_call_end',
+                        'result': result,
+                    },
+                }
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'mcp_tool_call_begin',
+                    'call_id': item_id,
+                    'server': item.get('server'),
+                    'tool': item.get('tool'),
+                    'arguments': item.get('arguments') or {},
+                },
+            }
+
+        return None
+
+    def _adapt_v2_error(self, raw_error: Any, turn_id: str) -> Optional[dict[str, Any]]:
+        if not isinstance(raw_error, dict):
+            return None
+
+        message = raw_error.get('message')
+        if isinstance(message, str):
+            try:
+                nested = json.loads(message)
+                nested_error = nested.get('error') if isinstance(nested, dict) else None
+                if isinstance(nested_error, dict) and nested_error.get('message'):
+                    message = nested_error['message']
+            except (TypeError, ValueError):
+                pass
+
+        return {
+            'id': turn_id,
+            'msg': {
+                'type': 'error',
+                'reason': raw_error.get('codexErrorInfo'),
+                'message': message or 'Codex turn failed',
+            },
+        }
+
+    @staticmethod
+    def _last_agent_message(turn: dict[str, Any]) -> Optional[str]:
+        items = turn.get('items')
+        if not isinstance(items, list):
+            return None
+        for item in reversed(items):
+            if isinstance(item, dict) and item.get('type') == 'agentMessage':
+                text = item.get('text')
+                if isinstance(text, str):
+                    return text
+        return None
 
     def _handle_server_request(self, packet: dict[str, Any]) -> None:
         method = packet.get('method')
@@ -898,14 +1084,18 @@ class _CodexBridge:
 
         if dispatch_cb is not None:
             if msg_type in ('assistant_message', 'task_complete', 'turn_aborted'):
-                if active_id:
-                    self._callbacks.pop(active_id, None)
-                self._active_msg_id = None
-                self._last_msg_id = None
-                self._last_cb = None
+                self._complete_active_turn()
             sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
         else:
             self._trace('event dropped no callback msg_type=%s id=%s', msg_type, event.get('id'))
+
+    def _complete_active_turn(self) -> None:
+        active_id = self._active_msg_id
+        if active_id:
+            self._callbacks.pop(active_id, None)
+        self._active_msg_id = None
+        self._last_msg_id = None
+        self._last_cb = None
 
     def _flush_pending(self) -> None:
         with self._pending_lock:
