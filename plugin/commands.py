@@ -10,6 +10,7 @@ import sublime  # type: ignore
 import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
+from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
@@ -25,7 +26,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-TRANSCRIPT_VIEW_FLAG = 'codex_is_transcript'
 HIDDEN_TRANSCRIPT_TYPES = {
     # Infra/bootstrap noise from app-server runtime.
     'mcp_startup_update',

@@ -16,16 +16,6 @@ The plug-in spins up a `codex app-server` subprocess, shows the conversation in
 a Markdown panel, and integrates approvals/sandboxed execution directly in the
 Sublime UI.
 
-### Shared chat UI development
-
-Panel primitives and the fixed Chat Markdown syntax are vendored from the
-source-only sibling repository `sublime-chat-ui`. Edit that source repository,
-then update this read-only subtree with:
-
-```bash
-./scripts/update_sublime_chat_ui.sh <ref>
-```
-
 ---
 
 ![](static/codex_title.png)
@@ -189,6 +179,18 @@ Notes
 - The fold is applied right after the section is appended. If your syntax
   definition delays section scopes, the plugin waits briefly to target the
   correct section.
+
+## Development
+
+### Shared chat UI
+
+Panel primitives and the fixed Chat Markdown syntax are vendored from the
+source-only sibling repository `sublime-chat-ui`. Edit that source repository,
+then update this read-only subtree with:
+
+```bash
+./scripts/update_sublime_chat_ui.sh <ref>
+```
 
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
 [^2]: If `codex` is installed and authenticated (for example via `codex login`).

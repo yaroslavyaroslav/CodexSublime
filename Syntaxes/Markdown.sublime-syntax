@@ -1,0 +1,7 @@
+%YAML 1.2
+---
+# Compatibility alias for views restored before the plugin can migrate them.
+name: Codex Markdown (Compatibility)
+scope: text.html.markdown
+version: 2
+extends: Packages/Codex/plugin/vendor/sublime_chat_ui/Syntaxes/ChatMarkdown.sublime-syntax
