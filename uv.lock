@@ -1,6 +1,6 @@
 version = 1
 revision = 3
-requires-python = ">=3.8"
+requires-python = ">=3.14"
 
 [[package]]
 name = "sublime-chat-ui"
