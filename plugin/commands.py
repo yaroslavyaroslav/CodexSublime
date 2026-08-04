@@ -10,6 +10,14 @@ import sublime  # type: ignore
 import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
+from .vendor.sublime_chat_ui.markdown import selection_markdown
+from .vendor.sublime_chat_ui.presentation import (
+    OUTPUT_PRESENTATION,
+    apply_presentation,
+    clear_view,
+    prepare_input_panel,
+    syntax_resource,
+)
 
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
@@ -61,30 +69,9 @@ def _cmd_trace(message: str, *args: object) -> None:
 _cmd_trace('commands module imported')
 
 
-def _package_name() -> str:
-    """Return the Sublime package folder name for this plugin."""
-    try:
-        # commands.py lives in <package>/plugin/commands.py
-        package = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
-
-        # Sublime exposes resources via ``Packages/<name>`` even when the
-        # package is installed as ``<name>.sublime-package`` inside
-        # ``Installed Packages``.  When running from the packed archive, the
-        # filesystem path includes the ``.sublime-package`` suffix and we must
-        # strip it; otherwise Sublime looks for
-        # ``Packages/<name>.sublime-package`` which does not exist.
-        if package.endswith('.sublime-package'):
-            package = os.path.splitext(package)[0]
-
-        return package
-    except Exception:
-        # Fallback to the expected package name when installed per README
-        return 'Codex'
-
-
 def _markdown_syntax_resource() -> str:
-    """Return resource path to the bundled Markdown syntax."""
-    return f"Packages/{_package_name()}/Syntaxes/Markdown.sublime-syntax"
+    """Return resource path to the shared vendored Chat Markdown syntax."""
+    return syntax_resource()
 
 
 def _get_transcript_view(window: sublime.Window) -> sublime.View | None:  # type: ignore[name-defined]
@@ -204,11 +191,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         is_panel = False
 
     target_view.set_read_only(False)
-    target_view.assign_syntax(_markdown_syntax_resource())
-
-    target_view.settings().set('scroll_past_end', True)
-    target_view.settings().set('gutter', True)
-    target_view.settings().set('line_numbers', False)
+    apply_presentation(target_view, OUTPUT_PRESENTATION, _markdown_syntax_resource())
 
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
@@ -854,30 +837,10 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
             _cmd_trace('prompt aborted: no window')
             return
 
-        panel = window.create_output_panel(self.INPUT_PANEL_NAME)
-        panel.set_read_only(False)
-        panel.assign_syntax(_markdown_syntax_resource())
-        panel.settings().set('scroll_past_end', True)
-        panel.settings().set('gutter', True)
-        panel.settings().set('line_numbers', False)
-        panel.settings().set('fold_buttons', False)
-
         # Pre-fill selection, if any, with optional code-fence wrapping.
-        initial_text = self._collect_selection_with_fence()
-        if initial_text:
-            panel.run_command('append', {'characters': initial_text})
-
-        # Put caret at end so user can continue typing.
-        panel.sel().clear()
-        panel.sel().add(sublime.Region(panel.size()))
-
-        window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
-        window.focus_view(panel)
+        initial_text = self._collect_selection_with_fence() or ''
+        prepare_input_panel(window, self.INPUT_PANEL_NAME, initial_text)
         _cmd_trace('input panel shown and focused')
-
-        # Ensure the panel is scrolled to the very end so the caret is visible
-        # even if we pre-filled a long selection.
-        panel.show(panel.size())
 
     # ---------------------------------------------------------------------
 
@@ -895,7 +858,6 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 
             # Determine a useful path representation (relative to the first
             # project folder if possible, otherwise absolute).
-            path_header = ''
             file_path = self.view.file_name()
             if file_path:
                 window = self.view.window()
@@ -907,17 +869,12 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
                             file_path = rel  # less noisy than absolute
                         except ValueError:
                             pass  # keep absolute path if relpath fails
-
-                path_header = f'**{file_path}**\n\n'
-
             syntax = self.view.syntax()
+            lang_token = ''
             if syntax and syntax.scope.startswith('source.'):
                 lang_token = syntax.name.split()[0].lower() if syntax.name else ''
-                body = f'```{lang_token}\n{selected}\n```\n\n'
-            else:
-                body = f'```\n{selected}\n```\n\n'
 
-            return path_header + body
+            return selection_markdown(selected, file_path, lang_token)
 
         return None
 
@@ -1014,7 +971,7 @@ class CodexOpenTranscriptCommand(sublime_plugin.WindowCommand):
             newly_created = True
             view.set_name('Codex')
             view.set_scratch(True)
-            view.assign_syntax(_markdown_syntax_resource())
+            apply_presentation(view, OUTPUT_PRESENTATION, _markdown_syntax_resource())
             view.settings().set(TRANSCRIPT_VIEW_FLAG, True)
 
         # If we just created the tab, seed it with the existing output panel
@@ -1049,18 +1006,12 @@ class CodexResetChatCommand(sublime_plugin.WindowCommand):
         # 2. Clear transcript view
         transcript = _get_transcript_view(self.window)
         if transcript is not None:
-            transcript.set_read_only(False)
-            transcript.run_command('select_all')
-            transcript.run_command('right_delete')
-            transcript.set_read_only(True)
+            clear_view(transcript)
 
         # 3. Clear output panel
         panel_view = self.window.find_output_panel('codex')
         if panel_view is not None:
-            panel_view.set_read_only(False)
-            panel_view.run_command('select_all')
-            panel_view.run_command('right_delete')
-            panel_view.set_read_only(True)
+            clear_view(panel_view)
 
         # 4. Remove persisted session_id (if any) so that the next prompt
         #    starts a brand new conversation but keeps other Codex project
