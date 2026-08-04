@@ -185,12 +185,16 @@ Notes
 ### Shared chat UI
 
 Panel primitives and the fixed Chat Markdown syntax are vendored from the
-source-only sibling repository `sublime-chat-ui`. Edit that source repository,
-then update this read-only subtree with:
+public [`sublime-chat-ui`](https://github.com/yaroslavyaroslav/sublime-chat-ui)
+source repository. Edit that repository, then update this read-only subtree
+with:
 
 ```bash
 ./scripts/update_sublime_chat_ui.sh <ref>
 ```
+
+Set `SUBLIME_CHAT_UI_REPO` to a local clone path to pull unpushed development
+branches.
 
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
 [^2]: If `codex` is installed and authenticated (for example via `codex login`).

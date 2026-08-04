@@ -2,7 +2,8 @@
 set -eu
 
 repo_root=$(git rev-parse --show-toplevel)
-ui_repo=${SUBLIME_CHAT_UI_REPO:-"$repo_root/../sublime-chat-ui"}
+cd "$repo_root"
+ui_repo=${SUBLIME_CHAT_UI_REPO:-"https://github.com/yaroslavyaroslav/sublime-chat-ui.git"}
 ref=${1:-main}
 
 git subtree pull \
@@ -10,4 +11,3 @@ git subtree pull \
     "$ui_repo" \
     "$ref" \
     --squash
-
