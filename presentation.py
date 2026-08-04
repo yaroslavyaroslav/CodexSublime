@@ -9,6 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+try:
+    from sublime import Region as _Region  # type: ignore
+except ImportError:  # Unit tests run outside Sublime's plugin host.
+    _Region = None
+
 
 def syntax_resource(package: Optional[str] = None) -> str:
     """Return the vendored Chat Markdown resource for the current host."""
@@ -88,18 +93,18 @@ def replace_content(view: Any, text: str) -> None:
 def view_text(view: Any) -> str:
     """Read all text from a Sublime view."""
 
-    from sublime import Region  # type: ignore
-
-    return view.substr(Region(0, view.size()))
+    if _Region is None:
+        raise RuntimeError("view_text() requires Sublime's Region API")
+    return view.substr(_Region(0, view.size()))
 
 
 def move_caret_to_end(view: Any) -> None:
     """Collapse selections to a single caret at the end of the view."""
 
-    from sublime import Region  # type: ignore
-
+    if _Region is None:
+        raise RuntimeError("move_caret_to_end() requires Sublime's Region API")
     view.sel().clear()
-    view.sel().add(Region(view.size()))
+    view.sel().add(_Region(view.size()))
 
 
 def show_panel(window: Any, panel_name: str, panel: Optional[Any] = None) -> None:
@@ -156,4 +161,3 @@ def scroll_to_end(view: Any, center: bool = False) -> None:
         view.show_at_center(point)
     else:
         view.show(point)
-
