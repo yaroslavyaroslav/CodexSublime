@@ -11,6 +11,7 @@ import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
+from .input_history import CodexInputHistoryController
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
@@ -18,6 +19,7 @@ from .vendor.sublime_chat_ui.presentation import (
     clear_view,
     prepare_input_panel,
     syntax_resource,
+    view_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -828,7 +830,7 @@ def _append_agent_message_delta(
 class CodexPromptCommand(sublime_plugin.TextCommand):
     """Open an *output panel* so the user can type a prompt."""
 
-    INPUT_PANEL_NAME = 'codex_input'
+    INPUT_PANEL_NAME = CodexInputHistoryController.PANEL_NAME
 
     def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
         _cmd_trace('prompt command entered')
@@ -838,7 +840,10 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
             return
 
         # Pre-fill selection, if any, with optional code-fence wrapping.
-        initial_text = self._collect_selection_with_fence() or ''
+        initial_text = self._collect_selection_with_fence()
+        if initial_text is None:
+            initial_text = CodexInputHistoryController.get_draft(window)
+        CodexInputHistoryController.reset_history_session(window)
         prepare_input_panel(window, self.INPUT_PANEL_NAME, initial_text)
         _cmd_trace('input panel shown and focused')
 
@@ -882,7 +887,7 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
     """Submit the content of the *codex_input* panel to Codex (⌘/Ctrl+Enter)."""
 
-    INPUT_PANEL_NAME = 'codex_input'
+    INPUT_PANEL_NAME = CodexInputHistoryController.PANEL_NAME
 
     def run(self) -> None:  # noqa: D401 – ST API shape
         _cmd_trace('submit command entered')
@@ -893,14 +898,17 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             sublime.status_message('no input panel open')
             return
 
-        prompt = panel_view.substr(sublime.Region(0, panel_view.size())).strip()
+        prompt = view_text(panel_view).strip()
         if not prompt:
             _cmd_trace('submit aborted: empty prompt')
             sublime.status_message('prompt is empty')
             return
 
         _cmd_trace('submit prompt chars=%d', len(prompt))
-        self.window.run_command('hide_panel')
+        CodexInputHistoryController.record_history(self.window, prompt)
+        CodexInputHistoryController.clear_draft(self.window)
+        CodexInputHistoryController.reset_history_session(self.window)
+        CodexInputHistoryController.hide_panel(self.window)
 
         try:
             _cmd_trace('creating bridge')
@@ -953,6 +961,124 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             session_id,
         )
         _cmd_trace('user prompt echoed to transcript')
+
+
+class CodexCancelInputPanelCommand(sublime_plugin.WindowCommand):
+    """Hide the input panel while preserving its current draft."""
+
+    def run(self) -> None:
+        panel = self.window.find_output_panel(CodexInputHistoryController.PANEL_NAME)
+        if panel is not None:
+            CodexInputHistoryController.save_draft(self.window, view_text(panel))
+        CodexInputHistoryController.reset_history_session(self.window)
+        CodexInputHistoryController.hide_panel(self.window)
+
+
+class CodexCancelInputPanelFromViewCommand(sublime_plugin.TextCommand):
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is not None:
+            window.run_command('codex_cancel_input_panel')
+
+
+class CodexInputHistoryPreviousCommand(sublime_plugin.TextCommand):
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is None:
+            return
+
+        current_text = view_text(self.view)
+        CodexInputHistoryController.reset_if_history_entry_changed(window, current_text)
+        if not CodexInputHistoryController.should_navigate_previous(self.view):
+            self._move(forward=False)
+            return
+
+        session = CodexInputHistoryController.history_session(window)
+        text = session.previous(
+            CodexInputHistoryController.get_history(window),
+            current_text,
+        )
+        if text is not None:
+            self._replace(edit, text)
+
+    def _move(self, forward: bool) -> None:
+        self.view.run_command('move', {'by': 'lines', 'forward': forward})
+
+    def _replace(self, edit: sublime.Edit, text: str) -> None:  # type: ignore[name-defined]
+        self.view.replace(edit, sublime.Region(0, self.view.size()), text)
+        self.view.sel().clear()
+        self.view.sel().add(sublime.Region(0))
+        self.view.show(0)
+
+
+class CodexInputHistoryNextCommand(CodexInputHistoryPreviousCommand):
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is None:
+            return
+
+        current_text = view_text(self.view)
+        CodexInputHistoryController.reset_if_history_entry_changed(window, current_text)
+        if not CodexInputHistoryController.should_navigate_next(self.view):
+            self._move(forward=True)
+            return
+
+        session = CodexInputHistoryController.history_session(window)
+        text = session.next(CodexInputHistoryController.get_history(window))
+        if text is not None:
+            self._replace(edit, text)
+
+
+class CodexInputPanelEventListener(sublime_plugin.EventListener):
+    """Route input-panel cancellation and prompt-history navigation."""
+
+    def on_window_command(
+        self,
+        window: sublime.Window,  # type: ignore[name-defined]
+        command_name: str,
+        args: dict | None,
+    ):
+        if (
+            command_name == 'hide_panel'
+            and not CodexInputHistoryController.is_hiding_panel(window)
+            and window.active_panel() == f'output.{CodexInputHistoryController.PANEL_NAME}'
+        ):
+            return ('codex_cancel_input_panel', None)
+        return None
+
+    def on_text_command(
+        self,
+        view: sublime.View,  # type: ignore[name-defined]
+        command_name: str,
+        args: dict | None,
+    ):
+        if not CodexInputHistoryController.is_input_panel_view(view):
+            return None
+
+        command_args = args or {}
+        if command_name == 'move' and command_args.get('by') == 'lines':
+            if command_args.get('forward'):
+                if CodexInputHistoryController.should_navigate_next(view):
+                    return ('codex_input_history_next', None)
+            elif CodexInputHistoryController.should_navigate_previous(view):
+                return ('codex_input_history_previous', None)
+
+        window = view.window()
+        if (
+            window is not None
+            and CodexInputHistoryController.history_session(window).browsing
+            and command_name not in {'codex_input_history_previous', 'codex_input_history_next'}
+        ):
+            CodexInputHistoryController.reset_history_session(window)
+
+        return None
+
+    def on_pre_close_window(self, window: sublime.Window) -> None:  # type: ignore[name-defined]
+        if window.active_panel() == f'output.{CodexInputHistoryController.PANEL_NAME}':
+            panel = window.find_output_panel(CodexInputHistoryController.PANEL_NAME)
+            if panel is not None:
+                CodexInputHistoryController.save_draft(window, view_text(panel))
+        CodexInputHistoryController.reset_history_session(window)
 
 
 # ---------------------------------------------------------------------------

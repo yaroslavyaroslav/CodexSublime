@@ -21,5 +21,13 @@
             { "key": "panel_has_focus" },
             { "key": "panel", "operand": "output.codex_input" }
         ]
+    },
+    {
+        "keys": ["escape"],
+        "command": "codex_cancel_input_panel_from_view",
+        "context": [
+            { "key": "panel_has_focus" },
+            { "key": "panel", "operand": "output.codex_input" }
+        ]
     }
 ]

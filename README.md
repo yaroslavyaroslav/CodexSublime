@@ -63,6 +63,8 @@ the commands and start chatting.
 
 ## Commands (⌘⇧P)
 - **Codex: New Message** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
+  At the start of the input, use Up/Down to browse earlier prompts; Escape keeps
+  the unfinished draft for the next time the panel opens.
 - **Codex: Open Transcript Tab** – open the conversation buffer in a normal tab.
 - **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and invalidate the stored `session_id` so the next prompt starts a brand-new session.
 
