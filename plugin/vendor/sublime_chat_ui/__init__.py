@@ -1,6 +1,7 @@
 """Source-only shared UI primitives for Sublime Text chat plugins."""
 
 from .history import PromptHistorySession
+from .links import MarkdownLink, local_file_target, markdown_link_at
 from .markdown import fenced_code, selection_markdown
 from .presentation import (
     INPUT_PRESENTATION,
@@ -21,6 +22,7 @@ from .presentation import (
 
 __all__ = [
     "INPUT_PRESENTATION",
+    "MarkdownLink",
     "OUTPUT_PRESENTATION",
     "PanelPresentation",
     "PromptHistorySession",
@@ -28,6 +30,8 @@ __all__ = [
     "apply_presentation",
     "clear_view",
     "fenced_code",
+    "local_file_target",
+    "markdown_link_at",
     "move_caret_to_end",
     "prepare_input_panel",
     "prepare_output_panel",
@@ -38,4 +42,3 @@ __all__ = [
     "syntax_resource",
     "view_text",
 ]
-
