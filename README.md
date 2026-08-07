@@ -63,6 +63,8 @@ the commands and start chatting.
 
 ## Commands (⌘⇧P)
 - **Codex: New Message** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
+  At the start of the input, use Up/Down to browse earlier prompts; Escape keeps
+  the unfinished draft for the next time the panel opens.
 - **Codex: Open Transcript Tab** – open the conversation buffer in a normal tab.
 - **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and invalidate the stored `session_id` so the next prompt starts a brand-new session.
 
@@ -179,6 +181,22 @@ Notes
 - The fold is applied right after the section is appended. If your syntax
   definition delays section scopes, the plugin waits briefly to target the
   correct section.
+
+## Development
+
+### Shared chat UI
+
+Panel primitives and the fixed Chat Markdown syntax are vendored from the
+public [`sublime-chat-ui`](https://github.com/yaroslavyaroslav/sublime-chat-ui)
+source repository. Edit that repository, then update this read-only subtree
+with:
+
+```bash
+./scripts/update_sublime_chat_ui.sh <ref>
+```
+
+Set `SUBLIME_CHAT_UI_REPO` to a local clone path to pull unpushed development
+branches.
 
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
 [^2]: If `codex` is installed and authenticated (for example via `codex login`).
