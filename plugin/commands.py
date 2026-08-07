@@ -11,8 +11,8 @@ import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
-from .file_links import local_file_target, markdown_link_at
 from .input_history import CodexInputHistoryController
+from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
