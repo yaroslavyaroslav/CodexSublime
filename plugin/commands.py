@@ -11,6 +11,7 @@ import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
+from .file_links import local_file_target, markdown_link_at
 from .input_history import CodexInputHistoryController
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
@@ -1030,7 +1031,7 @@ class CodexInputHistoryNextCommand(CodexInputHistoryPreviousCommand):
 
 
 class CodexInputPanelEventListener(sublime_plugin.EventListener):
-    """Route input-panel cancellation and prompt-history navigation."""
+    """Route transcript clicks and input-panel interactions."""
 
     def on_window_command(
         self,
@@ -1052,6 +1053,10 @@ class CodexInputPanelEventListener(sublime_plugin.EventListener):
         command_name: str,
         args: dict | None,
     ):
+        transcript_result = self._open_transcript_link(view, command_name, args)
+        if transcript_result is not None:
+            return transcript_result
+
         if not CodexInputHistoryController.is_input_panel_view(view):
             return None
 
@@ -1072,6 +1077,53 @@ class CodexInputPanelEventListener(sublime_plugin.EventListener):
             CodexInputHistoryController.reset_history_session(window)
 
         return None
+
+    def _open_transcript_link(
+        self,
+        view: sublime.View,  # type: ignore[name-defined]
+        command_name: str,
+        args: dict | None,
+    ):
+        command_args = args or {}
+        event = command_args.get('event')
+        if (
+            command_name != 'drag_select'
+            or not view.settings().get(TRANSCRIPT_VIEW_FLAG)
+            or not isinstance(event, dict)
+            or command_args.get('by')
+            or command_args.get('extend')
+            or command_args.get('subtractive')
+        ):
+            return None
+
+        x = event.get('x')
+        y = event.get('y')
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            return None
+
+        point = view.window_to_text((x, y))
+        if view.score_selector(point, 'meta.link.inline') <= 0:
+            return None
+
+        line = view.line(point)
+        link = markdown_link_at(view.substr(line), point - line.begin())
+        if link is None:
+            return None
+
+        target = local_file_target(link.destination)
+        if target is None:
+            return None
+
+        window = view.window()
+        if window is None:
+            return None
+
+        group, _ = window.get_view_index(view)
+        flags = sublime.ENCODED_POSITION | sublime.FORCE_GROUP
+        if command_args.get('additive'):
+            flags |= sublime.ADD_TO_SELECTION
+        window.open_file(target, flags, group)
+        return ('noop', None)
 
     def on_pre_close_window(self, window: sublime.Window) -> None:  # type: ignore[name-defined]
         if window.active_panel() == f'output.{CodexInputHistoryController.PANEL_NAME}':
