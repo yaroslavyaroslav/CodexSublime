@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodexSublime Release"
+  short_description: "Release CodexSublime safely from master"
+  default_prompt: "Use $codex-sublime-release to prepare and publish a CodexSublime release."
