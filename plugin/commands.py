@@ -1,17 +1,26 @@
 """Sublime Text commands and panel workflow for Codex."""
 
-from __future__ import annotations
-
 import json
 import logging
-import uuid
 import os
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime
 
 import sublime  # type: ignore
 import sublime_plugin  # type: ignore
 
 from .bridge_manager import get_bridge
+from .chat_syntax import TRANSCRIPT_VIEW_FLAG
+from .input_history import CodexInputHistoryController
+from .vendor.sublime_chat_ui.markdown import selection_markdown
+from .vendor.sublime_chat_ui.presentation import (
+    OUTPUT_PRESENTATION,
+    apply_presentation,
+    clear_view,
+    prepare_input_panel,
+    syntax_resource,
+    view_text,
+)
 
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
@@ -19,7 +28,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-TRANSCRIPT_VIEW_FLAG = 'codex_is_transcript'
 HIDDEN_TRANSCRIPT_TYPES = {
     # Infra/bootstrap noise from app-server runtime.
     'mcp_startup_update',
@@ -51,7 +59,7 @@ def _cmd_trace(message: str, *args: object) -> None:
         text = message % args if args else message
     except Exception:
         text = f'{message} {args!r}'
-    line = f'[{datetime.utcnow().isoformat()}Z] {text}\n'
+    line = f'[{datetime.now(UTC).isoformat()}] {text}\n'
     for path in ('/tmp/codex_sublime_commands.log', '/tmp/codex_sublime_main.log'):
         try:
             with open(path, 'a', encoding='utf-8') as fh:
@@ -63,30 +71,9 @@ def _cmd_trace(message: str, *args: object) -> None:
 _cmd_trace('commands module imported')
 
 
-def _package_name() -> str:
-    """Return the Sublime package folder name for this plugin."""
-    try:
-        # commands.py lives in <package>/plugin/commands.py
-        package = os.path.basename(os.path.dirname(os.path.dirname(__file__)))
-
-        # Sublime exposes resources via ``Packages/<name>`` even when the
-        # package is installed as ``<name>.sublime-package`` inside
-        # ``Installed Packages``.  When running from the packed archive, the
-        # filesystem path includes the ``.sublime-package`` suffix and we must
-        # strip it; otherwise Sublime looks for
-        # ``Packages/<name>.sublime-package`` which does not exist.
-        if package.endswith('.sublime-package'):
-            package = os.path.splitext(package)[0]
-
-        return package
-    except Exception:
-        # Fallback to the expected package name when installed per README
-        return 'Codex'
-
-
 def _markdown_syntax_resource() -> str:
-    """Return resource path to the bundled Markdown syntax."""
-    return f"Packages/{_package_name()}/Syntaxes/Markdown.sublime-syntax"
+    """Return resource path to the shared vendored Chat Markdown syntax."""
+    return syntax_resource()
 
 
 def _get_transcript_view(window: sublime.Window) -> sublime.View | None:  # type: ignore[name-defined]
@@ -206,11 +193,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         is_panel = False
 
     target_view.set_read_only(False)
-    target_view.assign_syntax(_markdown_syntax_resource())
-
-    target_view.settings().set('scroll_past_end', True)
-    target_view.settings().set('gutter', True)
-    target_view.settings().set('line_numbers', False)
+    apply_presentation(target_view, OUTPUT_PRESENTATION, _markdown_syntax_resource())
 
     msg = event.get('msg', {})
     msg_type: str = msg.get('type', 'unknown')
@@ -440,8 +423,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             # Arguments might be a raw string; try to parse JSON-looking text.
             try:
-                import ast  # local import to avoid top-level cost
-
                 if isinstance(arguments, str):
                     stripped = arguments.strip()
                     if stripped.startswith('{') or stripped.startswith('['):
@@ -849,7 +830,7 @@ def _append_agent_message_delta(
 class CodexPromptCommand(sublime_plugin.TextCommand):
     """Open an *output panel* so the user can type a prompt."""
 
-    INPUT_PANEL_NAME = 'codex_input'
+    INPUT_PANEL_NAME = CodexInputHistoryController.PANEL_NAME
 
     def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
         _cmd_trace('prompt command entered')
@@ -858,30 +839,13 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
             _cmd_trace('prompt aborted: no window')
             return
 
-        panel = window.create_output_panel(self.INPUT_PANEL_NAME)
-        panel.set_read_only(False)
-        panel.assign_syntax(_markdown_syntax_resource())
-        panel.settings().set('scroll_past_end', True)
-        panel.settings().set('gutter', True)
-        panel.settings().set('line_numbers', False)
-        panel.settings().set('fold_buttons', False)
-
         # Pre-fill selection, if any, with optional code-fence wrapping.
         initial_text = self._collect_selection_with_fence()
-        if initial_text:
-            panel.run_command('append', {'characters': initial_text})
-
-        # Put caret at end so user can continue typing.
-        panel.sel().clear()
-        panel.sel().add(sublime.Region(panel.size()))
-
-        window.run_command('show_panel', {'panel': f'output.{self.INPUT_PANEL_NAME}'})
-        window.focus_view(panel)
+        if initial_text is None:
+            initial_text = CodexInputHistoryController.get_draft(window)
+        CodexInputHistoryController.reset_history_session(window)
+        prepare_input_panel(window, self.INPUT_PANEL_NAME, initial_text)
         _cmd_trace('input panel shown and focused')
-
-        # Ensure the panel is scrolled to the very end so the caret is visible
-        # even if we pre-filled a long selection.
-        panel.show(panel.size())
 
     # ---------------------------------------------------------------------
 
@@ -899,7 +863,6 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 
             # Determine a useful path representation (relative to the first
             # project folder if possible, otherwise absolute).
-            path_header = ''
             file_path = self.view.file_name()
             if file_path:
                 window = self.view.window()
@@ -911,17 +874,12 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
                             file_path = rel  # less noisy than absolute
                         except ValueError:
                             pass  # keep absolute path if relpath fails
-
-                path_header = f'**{file_path}**\n\n'
-
             syntax = self.view.syntax()
+            lang_token = ''
             if syntax and syntax.scope.startswith('source.'):
                 lang_token = syntax.name.split()[0].lower() if syntax.name else ''
-                body = f'```{lang_token}\n{selected}\n```\n\n'
-            else:
-                body = f'```\n{selected}\n```\n\n'
 
-            return path_header + body
+            return selection_markdown(selected, file_path, lang_token)
 
         return None
 
@@ -929,7 +887,7 @@ class CodexPromptCommand(sublime_plugin.TextCommand):
 class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
     """Submit the content of the *codex_input* panel to Codex (⌘/Ctrl+Enter)."""
 
-    INPUT_PANEL_NAME = 'codex_input'
+    INPUT_PANEL_NAME = CodexInputHistoryController.PANEL_NAME
 
     def run(self) -> None:  # noqa: D401 – ST API shape
         _cmd_trace('submit command entered')
@@ -940,14 +898,17 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             sublime.status_message('no input panel open')
             return
 
-        prompt = panel_view.substr(sublime.Region(0, panel_view.size())).strip()
+        prompt = view_text(panel_view).strip()
         if not prompt:
             _cmd_trace('submit aborted: empty prompt')
             sublime.status_message('prompt is empty')
             return
 
         _cmd_trace('submit prompt chars=%d', len(prompt))
-        self.window.run_command('hide_panel')
+        CodexInputHistoryController.record_history(self.window, prompt)
+        CodexInputHistoryController.clear_draft(self.window)
+        CodexInputHistoryController.reset_history_session(self.window)
+        CodexInputHistoryController.hide_panel(self.window)
 
         try:
             _cmd_trace('creating bridge')
@@ -974,83 +935,6 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
         if 'session_id' in codex_cfg:
             session_id = codex_cfg['session_id']
         msg_id = str(uuid.uuid4())
-
-        # Determine cwd and sandbox/approval for this turn and use `user_turn`
-        # so the active turn inherits correct writable roots under Codex ≥0.22.
-        window = self.window
-        folders = window.folders() if window else []
-
-        # Prefer the project folder containing the active file as cwd.
-        active_file = None
-        try:
-            av = window.active_view() if window else None
-            active_file = av.file_name() if av else None
-        except Exception:
-            active_file = None
-
-        def _best_cwd(folders_list: list[str], active_path: str | None) -> str:
-            if active_path:
-                for folder in folders_list:
-                    try:
-                        ap = os.path.abspath(active_path)
-                        fp = os.path.abspath(folder)
-                        if ap.startswith(fp + os.sep) or ap == fp:
-                            return fp
-                    except Exception:
-                        continue
-            if folders_list:
-                return os.path.abspath(folders_list[0])
-            return os.path.abspath(os.getcwd())
-
-        cwd = _best_cwd(folders, active_file)
-
-        global_settings = sublime.load_settings('Codex.sublime-settings')
-        approval_policy = (
-            codex_cfg.get('approval_policy')
-            or global_settings.get('approval_policy')
-            or 'on-failure'
-        )
-
-        # Build sandbox_policy compatible with Codex protocol
-        sandbox_mode = codex_cfg.get('sandbox_mode') or global_settings.get('sandbox_mode') or 'workspace-write'
-        allow_network = bool(codex_cfg.get('sandbox_network_access') or global_settings.get('sandbox_network_access') or False)
-
-        extra_perms = codex_cfg.get('permissions', [])
-        if isinstance(extra_perms, str):
-            extra_perms = [extra_perms]
-        extra_perms = [os.path.abspath(p) for p in extra_perms if isinstance(p, str)]
-
-        writable_roots: list[str] = []
-        for p in folders + extra_perms:
-            ap = os.path.abspath(p)
-            if ap not in writable_roots and ap != cwd:
-                writable_roots.append(ap)
-
-        if sandbox_mode == 'workspace-write':
-            sandbox_policy = {
-                'mode': 'workspace-write',
-                'writable_roots': writable_roots,
-                'network_access': allow_network,
-            }
-        elif sandbox_mode == 'read-only':
-            sandbox_policy = {'mode': 'read-only'}
-        elif sandbox_mode == 'danger-full-access':
-            sandbox_policy = {'mode': 'danger-full-access'}
-        else:
-            sandbox_policy = {'mode': 'read-only'}
-
-        # Determine model + reasoning settings required by `user_turn`.
-        model = codex_cfg.get('model') or global_settings.get('model') or 'gpt-5'
-        reasoning_effort = (
-            codex_cfg.get('model_reasoning_effort')
-            or global_settings.get('model_reasoning_effort')
-            or 'medium'
-        )
-        reasoning_summary = (
-            codex_cfg.get('model_reasoning_summary')
-            or global_settings.get('model_reasoning_summary')
-            or 'detailed'
-        )
 
         bridge.send(
             {
@@ -1079,6 +963,124 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
         _cmd_trace('user prompt echoed to transcript')
 
 
+class CodexCancelInputPanelCommand(sublime_plugin.WindowCommand):
+    """Hide the input panel while preserving its current draft."""
+
+    def run(self) -> None:
+        panel = self.window.find_output_panel(CodexInputHistoryController.PANEL_NAME)
+        if panel is not None:
+            CodexInputHistoryController.save_draft(self.window, view_text(panel))
+        CodexInputHistoryController.reset_history_session(self.window)
+        CodexInputHistoryController.hide_panel(self.window)
+
+
+class CodexCancelInputPanelFromViewCommand(sublime_plugin.TextCommand):
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is not None:
+            window.run_command('codex_cancel_input_panel')
+
+
+class CodexInputHistoryPreviousCommand(sublime_plugin.TextCommand):
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is None:
+            return
+
+        current_text = view_text(self.view)
+        CodexInputHistoryController.reset_if_history_entry_changed(window, current_text)
+        if not CodexInputHistoryController.should_navigate_previous(self.view):
+            self._move(forward=False)
+            return
+
+        session = CodexInputHistoryController.history_session(window)
+        text = session.previous(
+            CodexInputHistoryController.get_history(window),
+            current_text,
+        )
+        if text is not None:
+            self._replace(edit, text)
+
+    def _move(self, forward: bool) -> None:
+        self.view.run_command('move', {'by': 'lines', 'forward': forward})
+
+    def _replace(self, edit: sublime.Edit, text: str) -> None:  # type: ignore[name-defined]
+        self.view.replace(edit, sublime.Region(0, self.view.size()), text)
+        self.view.sel().clear()
+        self.view.sel().add(sublime.Region(0))
+        self.view.show(0)
+
+
+class CodexInputHistoryNextCommand(CodexInputHistoryPreviousCommand):
+    def run(self, edit: sublime.Edit) -> None:  # type: ignore[name-defined]
+        window = self.view.window()
+        if window is None:
+            return
+
+        current_text = view_text(self.view)
+        CodexInputHistoryController.reset_if_history_entry_changed(window, current_text)
+        if not CodexInputHistoryController.should_navigate_next(self.view):
+            self._move(forward=True)
+            return
+
+        session = CodexInputHistoryController.history_session(window)
+        text = session.next(CodexInputHistoryController.get_history(window))
+        if text is not None:
+            self._replace(edit, text)
+
+
+class CodexInputPanelEventListener(sublime_plugin.EventListener):
+    """Route input-panel cancellation and prompt-history navigation."""
+
+    def on_window_command(
+        self,
+        window: sublime.Window,  # type: ignore[name-defined]
+        command_name: str,
+        args: dict | None,
+    ):
+        if (
+            command_name == 'hide_panel'
+            and not CodexInputHistoryController.is_hiding_panel(window)
+            and window.active_panel() == f'output.{CodexInputHistoryController.PANEL_NAME}'
+        ):
+            return ('codex_cancel_input_panel', None)
+        return None
+
+    def on_text_command(
+        self,
+        view: sublime.View,  # type: ignore[name-defined]
+        command_name: str,
+        args: dict | None,
+    ):
+        if not CodexInputHistoryController.is_input_panel_view(view):
+            return None
+
+        command_args = args or {}
+        if command_name == 'move' and command_args.get('by') == 'lines':
+            if command_args.get('forward'):
+                if CodexInputHistoryController.should_navigate_next(view):
+                    return ('codex_input_history_next', None)
+            elif CodexInputHistoryController.should_navigate_previous(view):
+                return ('codex_input_history_previous', None)
+
+        window = view.window()
+        if (
+            window is not None
+            and CodexInputHistoryController.history_session(window).browsing
+            and command_name not in {'codex_input_history_previous', 'codex_input_history_next'}
+        ):
+            CodexInputHistoryController.reset_history_session(window)
+
+        return None
+
+    def on_pre_close_window(self, window: sublime.Window) -> None:  # type: ignore[name-defined]
+        if window.active_panel() == f'output.{CodexInputHistoryController.PANEL_NAME}':
+            panel = window.find_output_panel(CodexInputHistoryController.PANEL_NAME)
+            if panel is not None:
+                CodexInputHistoryController.save_draft(window, view_text(panel))
+        CodexInputHistoryController.reset_history_session(window)
+
+
 # ---------------------------------------------------------------------------
 # Transcript tab opener
 # ---------------------------------------------------------------------------
@@ -1095,7 +1097,7 @@ class CodexOpenTranscriptCommand(sublime_plugin.WindowCommand):
             newly_created = True
             view.set_name('Codex')
             view.set_scratch(True)
-            view.assign_syntax(_markdown_syntax_resource())
+            apply_presentation(view, OUTPUT_PRESENTATION, _markdown_syntax_resource())
             view.settings().set(TRANSCRIPT_VIEW_FLAG, True)
 
         # If we just created the tab, seed it with the existing output panel
@@ -1130,18 +1132,12 @@ class CodexResetChatCommand(sublime_plugin.WindowCommand):
         # 2. Clear transcript view
         transcript = _get_transcript_view(self.window)
         if transcript is not None:
-            transcript.set_read_only(False)
-            transcript.run_command('select_all')
-            transcript.run_command('right_delete')
-            transcript.set_read_only(True)
+            clear_view(transcript)
 
         # 3. Clear output panel
         panel_view = self.window.find_output_panel('codex')
         if panel_view is not None:
-            panel_view.set_read_only(False)
-            panel_view.run_command('select_all')
-            panel_view.run_command('right_delete')
-            panel_view.set_read_only(True)
+            clear_view(panel_view)
 
         # 4. Remove persisted session_id (if any) so that the next prompt
         #    starts a brand new conversation but keeps other Codex project

@@ -3,8 +3,11 @@
 Chat with the [Codex CLI](https://github.com/openai/codex) directly from Sublime Text.
 
 > [!NOTE]
-> Version of this package tracks the Codex CLI version it is tested with (for this release: plugin `1.104.0` with codex-cli `0.104.0`).
+> Version of this package tracks the Codex CLI version it is tested with (for this release: plugin `1.147.0` with codex-cli `0.147.0`).
 > To get one, you can download binary to your system from [codex releases](https://github.com/openai/codex/releases) page and set up this plugin's settings to point to that exact binary.
+>
+> Plugin `1.147.0` requires Sublime Text build 4205 or newer and runs in its
+> Python 3.14 plugin host.
 
 ## Upgrade Notes
 
@@ -33,7 +36,7 @@ Sublime UI.
 
 ### Installation
 
-1. **Download Separate Codex instance** (the plug-in talks to the CLI, it is **not** bundled) from [codex releases](https://github.com/openai/codex/releases) matching this plugin release (for `1.104.0`, use codex-cli `0.104.0`).
+1. **Download Separate Codex instance** (the plug-in talks to the CLI, it is **not** bundled) from [codex releases](https://github.com/openai/codex/releases) matching this plugin release (for `1.147.0`, use codex-cli `0.147.0`).
 
 Point out the downloaded codex binary from within plugin settings:
 
@@ -60,6 +63,8 @@ the commands and start chatting.
 
 ## Commands (⌘⇧P)
 - **Codex: New Message** – open a small Markdown panel, type a prompt, hit *Super+Enter*.
+  At the start of the input, use Up/Down to browse earlier prompts; Escape keeps
+  the unfinished draft for the next time the panel opens.
 - **Codex: Open Transcript Tab** – open the conversation buffer in a normal tab.
 - **Codex: Reset Chat** – stop the Codex subprocess, clear the transcript and invalidate the stored `session_id` so the next prompt starts a brand-new session.
 
@@ -80,7 +85,8 @@ section.  Example:
             "session_id": null,
 
             // model & provider options
-            "model":            "o3",
+            // leave empty to use the model selected by your Codex account
+            "model":            "",
             "provider_name":    "openai",
             "base_url":         "https://api.openai.com/v1",
             "wire_api":         "responses",
@@ -175,6 +181,22 @@ Notes
 - The fold is applied right after the section is appended. If your syntax
   definition delays section scopes, the plugin waits briefly to target the
   correct section.
+
+## Development
+
+### Shared chat UI
+
+Panel primitives and the fixed Chat Markdown syntax are vendored from the
+public [`sublime-chat-ui`](https://github.com/yaroslavyaroslav/sublime-chat-ui)
+source repository. Edit that repository, then update this read-only subtree
+with:
+
+```bash
+./scripts/update_sublime_chat_ui.sh <ref>
+```
+
+Set `SUBLIME_CHAT_UI_REPO` to a local clone path to pull unpushed development
+branches.
 
 [^1]: https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers
 [^2]: If `codex` is installed and authenticated (for example via `codex login`).

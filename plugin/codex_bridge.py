@@ -1,7 +1,5 @@
 """Codex subprocess bridge based on `codex app-server`."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -12,8 +10,9 @@ import subprocess
 import threading
 import uuid
 from collections import deque
-from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 import sublime
 
@@ -39,7 +38,7 @@ def _project_settings() -> dict:
     return {}
 
 
-def _find_workspace_root(path: Optional[str]) -> Optional[str]:
+def _find_workspace_root(path: str | None) -> str | None:
     if not path:
         return None
     current = os.path.abspath(path)
@@ -55,7 +54,7 @@ def _find_workspace_root(path: Optional[str]) -> Optional[str]:
         current = parent
 
 
-def _best_workspace_cwd(project_folders: list[str], active_file_dir: Optional[str]) -> str:
+def _best_workspace_cwd(project_folders: list[str], active_file_dir: str | None) -> str:
     if active_file_dir:
         active_dir = os.path.abspath(active_file_dir)
         for folder in project_folders:
@@ -146,7 +145,7 @@ class _CodexBridge:
         project_folders = self._window.folders() if self._window else []
         self._project_folders = [os.path.abspath(p) for p in project_folders]
 
-        active_file_dir: Optional[str] = None
+        active_file_dir: str | None = None
         try:
             view = self._window.active_view() if self._window else None
             fn = view.file_name() if view else None
@@ -232,15 +231,16 @@ class _CodexBridge:
         self._waiters_lock = threading.Lock()
         self._state_lock = threading.Lock()
 
-        self._pending: list[tuple[Dict[str, Any], Optional[Callable[[dict[str, Any]], None]]]] = []
+        self._pending: list[tuple[dict[str, Any], Callable[[dict[str, Any]], None] | None]] = []
         self._rpc_waiters: dict[str, dict[str, Any]] = {}
         self._callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
-        self._active_msg_id: Optional[str] = None
-        self._last_msg_id: Optional[str] = None
-        self._last_cb: Optional[Callable[[dict[str, Any]], None]] = None
+        self._active_msg_id: str | None = None
+        self._last_msg_id: str | None = None
+        self._last_cb: Callable[[dict[str, Any]], None] | None = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
+        self._reported_v2_turn_errors: set[str] = set()
         self._protocol = 'legacy'
-        self._bootstrap_error: Optional[str] = None
+        self._bootstrap_error: str | None = None
         self._recent_stderr: deque[str] = deque(maxlen=20)
         self._ready = threading.Event()
         self._stopped = threading.Event()
@@ -270,7 +270,7 @@ class _CodexBridge:
         else:
             kill_process_tree(self.proc.pid)
 
-    def send(self, obj: Dict[str, Any], cb: Optional[Callable[[dict[str, Any]], None]] = None) -> None:
+    def send(self, obj: dict[str, Any], cb: Callable[[dict[str, Any]], None] | None = None) -> None:
         if self._bootstrap_failed.is_set():
             if cb is not None:
                 cb({'msg': self._error_payload(reason='bridge_not_ready')})
@@ -375,8 +375,8 @@ class _CodexBridge:
         method: str,
         params: dict[str, Any],
         *,
-        on_response: Optional[Callable[[dict[str, Any]], None]] = None,
-        on_error: Optional[Callable[[Any], None]] = None,
+        on_response: Callable[[dict[str, Any]], None] | None = None,
+        on_error: Callable[[Any], None] | None = None,
     ) -> None:
         request_id = str(uuid.uuid4())
         with self._waiters_lock:
@@ -401,8 +401,8 @@ class _CodexBridge:
             except BrokenPipeError:
                 logger.error('Broken pipe while sending data – process dead?')
 
-    def _bootstrap_modern_protocol(self) -> Optional[str]:
-        conversation_id: Optional[str] = None
+    def _bootstrap_modern_protocol(self) -> str | None:
+        conversation_id: str | None = None
         modern_supported = True
 
         if self._session_id:
@@ -443,7 +443,7 @@ class _CodexBridge:
         return conversation_id
 
     def _bootstrap_legacy_protocol(self) -> str:
-        conversation_id: Optional[str] = None
+        conversation_id: str | None = None
         if self._session_id:
             try:
                 self._trace('bootstrap: resumeConversation start session_id=%s', self._session_id)
@@ -479,7 +479,7 @@ class _CodexBridge:
         return conversation_id
 
     @staticmethod
-    def _extract_thread_id(result: dict[str, Any]) -> Optional[str]:
+    def _extract_thread_id(result: dict[str, Any]) -> str | None:
         thread = result.get('thread')
         if isinstance(thread, dict):
             thread_id = thread.get('id')
@@ -521,7 +521,7 @@ class _CodexBridge:
 
             if 'id' in packet and ('result' in packet or 'error' in packet):
                 key = self._request_key(packet.get('id'))
-                waiter_data: Optional[dict[str, Any]] = None
+                waiter_data: dict[str, Any] | None = None
                 with self._waiters_lock:
                     waiter_data = self._rpc_waiters.pop(key, None)
                 if waiter_data is not None:
@@ -574,9 +574,11 @@ class _CodexBridge:
         params = packet.get('params')
         if not isinstance(method, str):
             return
-        if not method.startswith('codex/event/'):
-            return
         if not isinstance(params, dict):
+            return
+
+        if not method.startswith('codex/event/'):
+            self._handle_v2_notification(method, params)
             return
 
         event = dict(params)
@@ -597,6 +599,189 @@ class _CodexBridge:
             return
         self._trace('event dispatch msg_type=%s id=%s', msg_type, event.get('id'))
         self._dispatch_event(event)
+
+    def _handle_v2_notification(self, method: str, params: dict[str, Any]) -> None:
+        event: dict[str, Any] | None = None
+
+        if method == 'item/agentMessage/delta':
+            item_id = str(params.get('itemId') or '')
+            delta = params.get('delta')
+            if item_id and isinstance(delta, str) and delta:
+                event = {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'agent_message_content_delta',
+                        'delta': delta,
+                        'itemId': item_id,
+                    },
+                }
+
+        elif method == 'item/started':
+            event = self._adapt_v2_item_event(params.get('item'), completed=False)
+
+        elif method == 'item/completed':
+            event = self._adapt_v2_item_event(params.get('item'), completed=True)
+
+        elif method == 'error':
+            turn_id = str(params.get('turnId') or '')
+            if turn_id:
+                self._reported_v2_turn_errors.add(turn_id)
+            event = self._adapt_v2_error(params.get('error'), turn_id)
+
+        elif method == 'turn/completed':
+            turn = params.get('turn')
+            if not isinstance(turn, dict):
+                return
+
+            turn_id = str(turn.get('id') or '')
+            error = turn.get('error')
+            if isinstance(error, dict) and turn_id not in self._reported_v2_turn_errors:
+                error_event = self._adapt_v2_error(error, turn_id)
+                if error_event is not None:
+                    self._dispatch_event(error_event)
+
+            self._reported_v2_turn_errors.discard(turn_id)
+            task_complete = {
+                'id': turn_id,
+                'msg': {
+                    'type': 'task_complete',
+                    'last_agent_message': self._last_agent_message(turn),
+                },
+            }
+            if self._should_suppress('task_complete'):
+                self._complete_active_turn()
+            else:
+                self._dispatch_event(task_complete)
+            return
+
+        if event is None:
+            return
+
+        msg = event.get('msg', {})
+        msg_type = msg.get('type') if isinstance(msg, dict) else None
+        if self._should_suppress(msg_type):
+            self._trace('v2 event suppressed method=%s msg_type=%s', method, msg_type)
+            return
+        self._trace('v2 event dispatch method=%s msg_type=%s id=%s', method, msg_type, event.get('id'))
+        self._dispatch_event(event)
+
+    def _adapt_v2_item_event(self, raw_item: Any, *, completed: bool) -> dict[str, Any] | None:
+        if not isinstance(raw_item, dict):
+            return None
+
+        item = raw_item
+        item_id = str(item.get('id') or '')
+        item_type = item.get('type')
+
+        if item_type == 'agentMessage':
+            if not completed:
+                return None
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'agent_message',
+                    'text': str(item.get('text') or ''),
+                    'itemId': item_id,
+                },
+            }
+
+        if item_type == 'commandExecution':
+            if completed:
+                return {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'exec_command_end',
+                        'exit_code': item.get('exitCode'),
+                        'stdout': str(item.get('aggregatedOutput') or ''),
+                        'stderr': '',
+                    },
+                }
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'exec_command_begin',
+                    'command': [str(item.get('command') or '')],
+                    'cwd': item.get('cwd'),
+                },
+            }
+
+        if item_type == 'fileChange':
+            changes = item.get('changes') or []
+            if completed:
+                return {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'patch_apply_end',
+                        'success': item.get('status') == 'completed',
+                        'changes': changes,
+                    },
+                }
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'patch_apply_begin',
+                    'auto_approved': False,
+                    'changes': changes,
+                },
+            }
+
+        if item_type == 'mcpToolCall':
+            if completed:
+                result = {'Err': item.get('error')} if item.get('error') else {'Ok': item.get('result') or {}}
+                return {
+                    'id': item_id,
+                    'msg': {
+                        'type': 'mcp_tool_call_end',
+                        'result': result,
+                    },
+                }
+            return {
+                'id': item_id,
+                'msg': {
+                    'type': 'mcp_tool_call_begin',
+                    'call_id': item_id,
+                    'server': item.get('server'),
+                    'tool': item.get('tool'),
+                    'arguments': item.get('arguments') or {},
+                },
+            }
+
+        return None
+
+    def _adapt_v2_error(self, raw_error: Any, turn_id: str) -> dict[str, Any] | None:
+        if not isinstance(raw_error, dict):
+            return None
+
+        message = raw_error.get('message')
+        if isinstance(message, str):
+            try:
+                nested = json.loads(message)
+                nested_error = nested.get('error') if isinstance(nested, dict) else None
+                if isinstance(nested_error, dict) and nested_error.get('message'):
+                    message = nested_error['message']
+            except (TypeError, ValueError):
+                pass
+
+        return {
+            'id': turn_id,
+            'msg': {
+                'type': 'error',
+                'reason': raw_error.get('codexErrorInfo'),
+                'message': message or 'Codex turn failed',
+            },
+        }
+
+    @staticmethod
+    def _last_agent_message(turn: dict[str, Any]) -> str | None:
+        items = turn.get('items')
+        if not isinstance(items, list):
+            return None
+        for item in reversed(items):
+            if isinstance(item, dict) and item.get('type') == 'agentMessage':
+                text = item.get('text')
+                if isinstance(text, str):
+                    return text
+        return None
 
     def _handle_server_request(self, packet: dict[str, Any]) -> None:
         method = packet.get('method')
@@ -730,7 +915,7 @@ class _CodexBridge:
         self._send_rpc_error(request_id, f'Unsupported server request: {method}')
         self._trace('unsupported server request method=%s', method)
 
-    def _send_now(self, obj: Dict[str, Any], cb: Optional[Callable[[dict[str, Any]], None]]) -> None:
+    def _send_now(self, obj: dict[str, Any], cb: Callable[[dict[str, Any]], None] | None) -> None:
         op = obj.get('op') if isinstance(obj, dict) else None
         if not isinstance(op, dict):
             return
@@ -889,7 +1074,7 @@ class _CodexBridge:
         msg = event.get('msg', {}) if isinstance(event, dict) else {}
         msg_type = msg.get('type') if isinstance(msg, dict) else None
 
-        dispatch_cb: Optional[Callable[[dict[str, Any]], None]] = None
+        dispatch_cb: Callable[[dict[str, Any]], None] | None = None
         active_id = self._active_msg_id
         if active_id and active_id in self._callbacks:
             dispatch_cb = self._callbacks[active_id]
@@ -898,14 +1083,18 @@ class _CodexBridge:
 
         if dispatch_cb is not None:
             if msg_type in ('assistant_message', 'task_complete', 'turn_aborted'):
-                if active_id:
-                    self._callbacks.pop(active_id, None)
-                self._active_msg_id = None
-                self._last_msg_id = None
-                self._last_cb = None
+                self._complete_active_turn()
             sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
         else:
             self._trace('event dropped no callback msg_type=%s id=%s', msg_type, event.get('id'))
+
+    def _complete_active_turn(self) -> None:
+        active_id = self._active_msg_id
+        if active_id:
+            self._callbacks.pop(active_id, None)
+        self._active_msg_id = None
+        self._last_msg_id = None
+        self._last_cb = None
 
     def _flush_pending(self) -> None:
         with self._pending_lock:
@@ -934,7 +1123,7 @@ class _CodexBridge:
                 except Exception:
                     logger.debug('callback raised after bridge shutdown', exc_info=True)
 
-    def _error_payload(self, *, reason: str, default_message: Optional[str] = None) -> dict[str, Any]:
+    def _error_payload(self, *, reason: str, default_message: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
             'type': 'error',
             'reason': reason,
@@ -959,7 +1148,7 @@ class _CodexBridge:
         return f'Failed to bootstrap Codex app-server: {detail}'
 
     @staticmethod
-    def _ensure_session_id(window: Optional['sublime.Window']) -> str:  # type: ignore[name-defined]
+    def _ensure_session_id(window: sublime.Window | None) -> str:  # type: ignore[name-defined]
         if window is None:
             return str(uuid.uuid4())
         data = window.project_data()
@@ -967,7 +1156,7 @@ class _CodexBridge:
             return str(uuid.uuid4())
         settings_block = data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
-        session_id: Optional[str] = codex_cfg.get('session_id')
+        session_id: str | None = codex_cfg.get('session_id')
         if not session_id:
             session_id = str(uuid.uuid4())
             codex_cfg['session_id'] = session_id
@@ -977,7 +1166,7 @@ class _CodexBridge:
         return session_id
 
     @staticmethod
-    def _persist_session_id(window: Optional['sublime.Window'], session_id: str) -> None:  # type: ignore[name-defined]
+    def _persist_session_id(window: sublime.Window | None, session_id: str) -> None:  # type: ignore[name-defined]
         if window is None:
             return
         data = window.project_data()
@@ -997,7 +1186,7 @@ class _CodexBridge:
             text = message % args if args else message
         except Exception:
             text = f'{message} {args!r}'
-        line = f'[{datetime.utcnow().isoformat()}Z] {text}\n'
+        line = f'[{datetime.now(UTC).isoformat()}] {text}\n'
         try:
             with open(self._debug_log_file, 'a', encoding='utf-8') as fh:
                 fh.write(line)
