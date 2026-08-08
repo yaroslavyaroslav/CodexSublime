@@ -13,9 +13,10 @@ from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .input_history import CodexInputHistoryController
 from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
-from .vendor.sublime_chat_ui.markdown import section_break, selection_markdown
+from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
+    append_markdown_section,
     apply_presentation,
     clear_view,
     prepare_input_panel,
@@ -647,29 +648,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             pre_size = 0
 
-    # Every output section starts after a hard Markdown boundary. Chat Markdown
-    # treats this boundary as a syntax reset, so malformed fenced code emitted
-    # by a command cannot swallow the following section.
-    section_prefix = section_break() if header else ''
-    header_offset = len(section_prefix)
-
-    # Ensure section boundaries start on a new line. If the buffer doesn't end
-    # with a newline and we're about to append content that doesn't start
-    # with one, prefix a single "\n" so folded previews don't run headers
-    # together like "## A … ## B" on the same line.
-    to_append = section_prefix + header + body
-    try:
-        needs_leading_nl = False
-        if pre_size > 0 and to_append and not to_append.startswith('\n'):
-            last_char = target_view.substr(sublime.Region(pre_size - 1, pre_size))
-            needs_leading_nl = last_char != '\n'
-        if needs_leading_nl:
-            to_append = '\n' + to_append
-            header_offset += 1
-    except Exception:
-        pass
-
-    target_view.run_command('append', {'characters': to_append, 'force': True})
+    header_start = append_markdown_section(target_view, header, body)
 
     # Auto-fold freshly appended section when configured to do so.
     try:
@@ -683,7 +662,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
                     if tries_left <= 0 or target_view.is_loading():
                         return
                     # Determine the start of the newly added header.
-                    probe = pre_size + header_offset
+                    probe = header_start
 
                     sections = target_view.find_by_selector('meta.section')
                     # Work with sections sorted by start
@@ -805,16 +784,7 @@ def _append_agent_message_delta(
         STREAMING_AGENT_BLOCKS[stream_key] = state
 
     if not state.get('started'):
-        pre_size = target_view.size()
-        to_append = '## agent_message\n\n'
-        try:
-            if pre_size > 0:
-                last_char = target_view.substr(sublime.Region(pre_size - 1, pre_size))
-                if last_char != '\n':
-                    to_append = '\n' + to_append
-        except Exception:
-            pass
-        target_view.run_command('append', {'characters': to_append, 'force': True})
+        append_markdown_section(target_view, '## agent_message\n\n')
         state['started'] = '1'
 
     state['text'] = state.get('text', '') + delta
