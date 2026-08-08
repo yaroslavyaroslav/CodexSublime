@@ -1,9 +1,12 @@
 import unittest
 
-from markdown import fenced_code, selection_markdown
+from markdown import fenced_code, section_break, selection_markdown
 
 
 class MarkdownTests(unittest.TestCase):
+    def test_section_break_is_a_markdown_thematic_break(self):
+        self.assertEqual("----------\n\n", section_break())
+
     def test_fenced_code_normalizes_trailing_newlines(self):
         self.assertEqual("```py\nprint(1)\n```\n\n", fenced_code("print(1)\n", "py"))
 
@@ -16,4 +19,3 @@ class MarkdownTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

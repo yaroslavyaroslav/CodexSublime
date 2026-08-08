@@ -12,9 +12,11 @@ import sublime_plugin  # type: ignore
 from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .input_history import CodexInputHistoryController
+from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
+    append_markdown_section,
     apply_presentation,
     clear_view,
     prepare_input_panel,
@@ -646,22 +648,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             pre_size = 0
 
-    # Ensure section headers start on a new line. If the buffer doesn't end
-    # with a newline and we're about to append content that doesn't start
-    # with one, prefix a single "\n" so folded previews don't run headers
-    # together like "## A … ## B" on the same line.
-    to_append = header + body
-    try:
-        needs_leading_nl = False
-        if pre_size > 0 and to_append and not to_append.startswith('\n'):
-            last_char = target_view.substr(sublime.Region(pre_size - 1, pre_size))
-            needs_leading_nl = last_char != '\n'
-        if needs_leading_nl:
-            to_append = '\n' + to_append
-    except Exception:
-        pass
-
-    target_view.run_command('append', {'characters': to_append, 'force': True})
+    header_start = append_markdown_section(target_view, header, body)
 
     # Auto-fold freshly appended section when configured to do so.
     try:
@@ -675,12 +662,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
                     if tries_left <= 0 or target_view.is_loading():
                         return
                     # Determine the start of the newly added header.
-                    probe = pre_size
-                    try:
-                        if to_append.startswith('\n'):
-                            probe = pre_size + 1
-                    except Exception:
-                        pass
+                    probe = header_start
 
                     sections = target_view.find_by_selector('meta.section')
                     # Work with sections sorted by start
@@ -802,16 +784,7 @@ def _append_agent_message_delta(
         STREAMING_AGENT_BLOCKS[stream_key] = state
 
     if not state.get('started'):
-        pre_size = target_view.size()
-        to_append = '## agent_message\n\n'
-        try:
-            if pre_size > 0:
-                last_char = target_view.substr(sublime.Region(pre_size - 1, pre_size))
-                if last_char != '\n':
-                    to_append = '\n' + to_append
-        except Exception:
-            pass
-        target_view.run_command('append', {'characters': to_append, 'force': True})
+        append_markdown_section(target_view, '## agent_message\n\n')
         state['started'] = '1'
 
     state['text'] = state.get('text', '') + delta
@@ -1030,7 +1003,7 @@ class CodexInputHistoryNextCommand(CodexInputHistoryPreviousCommand):
 
 
 class CodexInputPanelEventListener(sublime_plugin.EventListener):
-    """Route input-panel cancellation and prompt-history navigation."""
+    """Route transcript clicks and input-panel interactions."""
 
     def on_window_command(
         self,
@@ -1052,6 +1025,10 @@ class CodexInputPanelEventListener(sublime_plugin.EventListener):
         command_name: str,
         args: dict | None,
     ):
+        transcript_result = self._open_transcript_link(view, command_name, args)
+        if transcript_result is not None:
+            return transcript_result
+
         if not CodexInputHistoryController.is_input_panel_view(view):
             return None
 
@@ -1072,6 +1049,53 @@ class CodexInputPanelEventListener(sublime_plugin.EventListener):
             CodexInputHistoryController.reset_history_session(window)
 
         return None
+
+    def _open_transcript_link(
+        self,
+        view: sublime.View,  # type: ignore[name-defined]
+        command_name: str,
+        args: dict | None,
+    ):
+        command_args = args or {}
+        event = command_args.get('event')
+        if (
+            command_name != 'drag_select'
+            or not view.settings().get(TRANSCRIPT_VIEW_FLAG)
+            or not isinstance(event, dict)
+            or command_args.get('by')
+            or command_args.get('extend')
+            or command_args.get('subtractive')
+        ):
+            return None
+
+        x = event.get('x')
+        y = event.get('y')
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            return None
+
+        point = view.window_to_text((x, y))
+        if view.score_selector(point, 'meta.link.inline') <= 0:
+            return None
+
+        line = view.line(point)
+        link = markdown_link_at(view.substr(line), point - line.begin())
+        if link is None:
+            return None
+
+        target = local_file_target(link.destination)
+        if target is None:
+            return None
+
+        window = view.window()
+        if window is None:
+            return None
+
+        group, _ = window.get_view_index(view)
+        flags = sublime.ENCODED_POSITION | sublime.FORCE_GROUP
+        if command_args.get('additive'):
+            flags |= sublime.ADD_TO_SELECTION
+        window.open_file(target, flags, group)
+        return ('noop', None)
 
     def on_pre_close_window(self, window: sublime.Window) -> None:  # type: ignore[name-defined]
         if window.active_panel() == f'output.{CodexInputHistoryController.PANEL_NAME}':
