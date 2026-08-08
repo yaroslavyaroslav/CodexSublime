@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Optional
 
 
+def section_break() -> str:
+    """Return the hard Markdown boundary used between transcript sections."""
+
+    return "----------\n\n"
+
+
 def fenced_code(text: str, language: str = "") -> str:
     """Wrap text in a fenced code block with stable trailing spacing."""
 
@@ -21,4 +27,3 @@ def selection_markdown(
 
     header = "**{}**\n\n".format(file_path) if file_path else ""
     return header + fenced_code(text, language or "")
-

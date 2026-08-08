@@ -2,7 +2,7 @@
 
 from .history import PromptHistorySession
 from .links import MarkdownLink, local_file_target, markdown_link_at
-from .markdown import fenced_code, selection_markdown
+from .markdown import fenced_code, section_break, selection_markdown
 from .presentation import (
     INPUT_PRESENTATION,
     OUTPUT_PRESENTATION,
@@ -37,6 +37,7 @@ __all__ = [
     "prepare_output_panel",
     "replace_content",
     "scroll_to_end",
+    "section_break",
     "selection_markdown",
     "show_panel",
     "syntax_resource",
