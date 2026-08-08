@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sublime Explain Diff"
+  short_description: "Explain branch changes inside Sublime diffs"
+  default_prompt: "Use $sublime-explain-diff to explain this branch and annotate its changed and added code in Sublime Text."
