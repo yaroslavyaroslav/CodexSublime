@@ -13,7 +13,7 @@ from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .input_history import CodexInputHistoryController
 from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
-from .vendor.sublime_chat_ui.markdown import selection_markdown
+from .vendor.sublime_chat_ui.markdown import section_break, selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
     apply_presentation,
@@ -647,11 +647,17 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             pre_size = 0
 
-    # Ensure section headers start on a new line. If the buffer doesn't end
+    # Every output section starts after a hard Markdown boundary. Chat Markdown
+    # treats this boundary as a syntax reset, so malformed fenced code emitted
+    # by a command cannot swallow the following section.
+    section_prefix = section_break() if header else ''
+    header_offset = len(section_prefix)
+
+    # Ensure section boundaries start on a new line. If the buffer doesn't end
     # with a newline and we're about to append content that doesn't start
     # with one, prefix a single "\n" so folded previews don't run headers
     # together like "## A … ## B" on the same line.
-    to_append = header + body
+    to_append = section_prefix + header + body
     try:
         needs_leading_nl = False
         if pre_size > 0 and to_append and not to_append.startswith('\n'):
@@ -659,6 +665,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
             needs_leading_nl = last_char != '\n'
         if needs_leading_nl:
             to_append = '\n' + to_append
+            header_offset += 1
     except Exception:
         pass
 
@@ -676,12 +683,7 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
                     if tries_left <= 0 or target_view.is_loading():
                         return
                     # Determine the start of the newly added header.
-                    probe = pre_size
-                    try:
-                        if to_append.startswith('\n'):
-                            probe = pre_size + 1
-                    except Exception:
-                        pass
+                    probe = pre_size + header_offset
 
                     sections = target_view.find_by_selector('meta.section')
                     # Work with sections sorted by start
