@@ -136,10 +136,10 @@ def kill_process_tree(root_pid: int) -> None:  # pragma: no cover
 class _CodexBridge:
     """Manage a single `codex app-server` process and adapt it to plugin events."""
 
-    def __init__(self) -> None:
+    def __init__(self, window: sublime.Window | None) -> None:  # type: ignore[name-defined]
         settings = sublime.load_settings('Codex.sublime-settings')
         token: str = settings.get('token', '')  # type: ignore[name-defined]
-        self._window = sublime.active_window()
+        self._window = window
         self._debug_log_file: str = settings.get('debug_log_file', '/tmp/codex_sublime_bridge.log')  # type: ignore[name-defined]
 
         project_folders = self._window.folders() if self._window else []

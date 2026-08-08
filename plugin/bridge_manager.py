@@ -29,7 +29,7 @@ def get_bridge(window: sublime.Window | None) -> _CodexBridge:  # type: ignore[n
 
     if key not in bridges:
         logger.debug('[Codex] creating new bridge for window %s', key)
-        bridges[key] = _CodexBridge()
+        bridges[key] = _CodexBridge(window)
     else:
         logger.debug('[Codex] reusing existing bridge for window %s', key)
 
