@@ -16,7 +16,10 @@ from typing import Any
 
 import sublime
 
+from .vendor.sublime_agent_tools import SublimeToolRuntime, dynamic_tool_namespace
+
 logger = logging.getLogger(__name__)
+AGENT_TOOLS_VERSION = 1
 
 
 def _is_debug_logging_enabled() -> bool:
@@ -155,6 +158,7 @@ class _CodexBridge:
             active_file_dir = None
 
         self._cwd = _best_workspace_cwd(self._project_folders, active_file_dir)
+        self._sublime_tools = SublimeToolRuntime(self._window, self._cwd)
 
         env = os.environ.copy()
         if token and token != '<your-token>':
@@ -426,7 +430,11 @@ class _CodexBridge:
         if modern_supported and not conversation_id:
             try:
                 self._trace('bootstrap: thread/start start')
-                created = self._send_request_sync('thread/start', {}, timeout=20.0)
+                created = self._send_request_sync(
+                    'thread/start',
+                    {'cwd': self._cwd, 'dynamicTools': [dynamic_tool_namespace()]},
+                    timeout=20.0,
+                )
                 conversation_id = self._extract_thread_id(created)
                 self._trace('bootstrap: thread/start ok conversation_id=%s', conversation_id)
             except Exception as exc:
@@ -886,30 +894,50 @@ class _CodexBridge:
 
         if method == 'item/tool/call':
             event_id = str(params.get('callId') or uuid.uuid4())
+            namespace = params.get('namespace')
+            tool = params.get('tool')
+            if isinstance(tool, str) and tool.startswith('sublime.'):
+                tool = tool.removeprefix('sublime.')
             self._dispatch_event(
                 {
                     'id': event_id,
                     'msg': {
                         'type': 'dynamic_tool_call_request',
-                        'tool': params.get('tool'),
+                        'namespace': namespace,
+                        'tool': tool,
                         'arguments': params.get('arguments'),
-                        'message': 'Dynamic tool calls are not implemented in Sublime client.',
                     },
                 }
             )
-            self._send_rpc_response(
-                request_id,
-                {
-                    'contentItems': [
-                        {
-                            'type': 'inputText',
-                            'text': 'Dynamic tool calls are not implemented in this Sublime client.',
-                        }
-                    ],
-                    'success': False,
-                },
-            )
-            self._trace('tool call auto-declined event_id=%s', event_id)
+
+            if namespace not in (None, 'sublime') or not isinstance(tool, str):
+                self._send_rpc_response(
+                    request_id,
+                    {
+                        'contentItems': [{'type': 'inputText', 'text': 'Unsupported dynamic tool namespace.'}],
+                        'success': False,
+                    },
+                )
+                self._trace('tool call rejected namespace=%s tool=%s', namespace, tool)
+                return
+
+            def finish_tool_call(response: Any) -> None:
+                self._send_rpc_response(
+                    request_id,
+                    {
+                        'contentItems': [{'type': 'inputText', 'text': response.text}],
+                        'success': response.success,
+                    },
+                )
+                self._trace(
+                    'tool call completed event_id=%s tool=%s success=%s',
+                    event_id,
+                    tool,
+                    response.success,
+                )
+
+            self._sublime_tools.execute(tool, params.get('arguments'), finish_tool_call)
+            self._trace('tool call dispatched event_id=%s tool=%s', event_id, tool)
             return
 
         self._send_rpc_error(request_id, f'Unsupported server request: {method}')
@@ -1056,6 +1084,11 @@ class _CodexBridge:
                 path = item.get('path')
                 if path:
                     out.append({'type': 'localImage', 'path': str(path)})
+            elif item_type == 'skill':
+                name = item.get('name')
+                path = item.get('path')
+                if name and path:
+                    out.append({'type': 'skill', 'name': str(name), 'path': str(path)})
         return out
 
     def _should_suppress(self, msg_type: Any) -> bool:
@@ -1156,6 +1189,9 @@ class _CodexBridge:
             return str(uuid.uuid4())
         settings_block = data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
+        if codex_cfg.get('agent_tools_version') != AGENT_TOOLS_VERSION:
+            codex_cfg['session_id'] = None
+            codex_cfg['agent_tools_version'] = AGENT_TOOLS_VERSION
         session_id: str | None = codex_cfg.get('session_id')
         if not session_id:
             session_id = str(uuid.uuid4())
@@ -1175,6 +1211,7 @@ class _CodexBridge:
         settings_block = data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
         codex_cfg['session_id'] = session_id
+        codex_cfg['agent_tools_version'] = AGENT_TOOLS_VERSION
         settings_block['codex'] = codex_cfg
         data['settings'] = settings_block
         window.set_project_data(data)

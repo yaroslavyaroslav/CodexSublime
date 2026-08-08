@@ -12,6 +12,7 @@ import sublime_plugin  # type: ignore
 from .bridge_manager import get_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .input_history import CodexInputHistoryController
+from .sublime_agent_integration import skill_input_items
 from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
@@ -909,12 +910,18 @@ class CodexSubmitInputPanelCommand(sublime_plugin.WindowCommand):
             session_id = codex_cfg['session_id']
         msg_id = str(uuid.uuid4())
 
+        input_items = [{'type': 'text', 'text': prompt}]
+        try:
+            input_items.extend(skill_input_items(prompt))
+        except Exception as exc:
+            logger.warning('Failed to attach Sublime diff skill: %s', exc)
+
         bridge.send(
             {
                 'id': msg_id,
                 'op': {
                     'type': 'user_input',
-                    'items': [{'type': 'text', 'text': prompt}],
+                    'items': input_items,
                 },
             },
             cb=lambda event, p=prompt: _display_assistant_response(self.window, p, event, session_id),
