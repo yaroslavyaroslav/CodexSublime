@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 try:
+    from .markdown import section_break
+except ImportError:  # Unit tests import this source module directly.
+    from markdown import section_break
+
+try:
     from sublime import Region as _Region  # type: ignore
 except ImportError:  # Unit tests run outside Sublime's plugin host.
     _Region = None
@@ -147,6 +152,22 @@ def prepare_output_panel(
 
 def append_text(view: Any, text: str) -> None:
     view.run_command("append", {"characters": text, "force": True})
+
+
+def append_markdown_section(view: Any, header: str, body: str = "") -> int:
+    """Append a transcript section and return its absolute header position."""
+
+    start = view.size()
+    prefix = section_break() if header else ""
+    text = prefix + header + body
+    header_start = start + len(prefix)
+
+    if start > 0 and text and not text.startswith("\n") and view.substr(start - 1) != "\n":
+        text = "\n" + text
+        header_start += 1
+
+    append_text(view, text)
+    return header_start
 
 
 def clear_view(view: Any, read_only: bool = True) -> None:
