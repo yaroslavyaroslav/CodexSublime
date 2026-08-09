@@ -21,6 +21,13 @@ class Phantom:
         self.layout = layout
 
 
+class MarkdownPhantom(Phantom):
+    def __init__(self, region, content, layout, css=None, wrapper_class=None) -> None:
+        super().__init__(region, content, layout)
+        self.css = css
+        self.wrapper_class = wrapper_class
+
+
 class PhantomSet:
     def __init__(self, view: 'FakeView', key: str) -> None:
         self.view = view
@@ -155,6 +162,9 @@ class SublimeToolRuntimeTests(unittest.TestCase):
         })
         self.assertTrue(result.success, result.text)
         self.assertEqual(json.loads(result.text)['count'], 1)
+        phantom = next(iter(self.runtime._annotation_sets.values())).phantoms[0]
+        self.assertIn('border: 1px solid', phantom.content)
+        self.assertIn('class="sublime-agent-annotation"', phantom.content)
 
         deleted_side = self.runtime._set_annotations({
             'path': 'modified.py',
@@ -173,6 +183,22 @@ class SublimeToolRuntimeTests(unittest.TestCase):
         cleared = self.runtime._clear_annotations({'path': 'modified.py'})
         self.assertTrue(cleared.success)
         self.assertEqual(json.loads(cleared.text)['cleared_sets'], 1)
+
+    def test_mdpopups_annotations_receive_the_framed_wrapper(self) -> None:
+        responses = []
+        self.runtime._open_diff({'base_ref': self.base, 'comparison': 'direct'}, responses.append)
+        self.runtime._uses_mdpopups = True
+        self.runtime._phantom_cls = MarkdownPhantom
+
+        result = self.runtime._set_annotations({
+            'path': 'modified.py',
+            'annotations': [{'id': 'intent', 'line': 2, 'markdown': '**Reason**'}],
+        })
+
+        self.assertTrue(result.success, result.text)
+        phantom = next(iter(self.runtime._annotation_sets.values())).phantoms[0]
+        self.assertEqual(phantom.wrapper_class, 'sublime-agent-annotation')
+        self.assertIn('border: 1px solid', phantom.css)
 
 
 if __name__ == '__main__':
