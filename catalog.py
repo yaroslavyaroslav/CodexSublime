@@ -20,7 +20,10 @@ def dynamic_tool_namespace() -> dict[str, Any]:
     return {
         'type': 'namespace',
         'name': 'sublime',
-        'description': 'Present files, Git diffs, and explanatory annotations in the bound Sublime Text window.',
+        'description': (
+            'Present files, Git diffs, annotations, and tabs in the bound Sublime Text window. '
+            'Use these tools instead of the Sublime CLI for tab management.'
+        ),
         'tools': [
             _function(
                 'open_diff',
@@ -53,32 +56,43 @@ def dynamic_tool_namespace() -> dict[str, Any]:
             _function(
                 'set_annotations',
                 (
-                    'Add or update Markdown phantoms on added or changed current-buffer lines. '
-                    'Do not annotate deleted-only lines.'
+                    'Atomically add or update Markdown phantoms across one or more open diff files. '
+                    'Every file is validated before any annotations are changed. Do not annotate deleted-only lines.'
                 ),
                 {
                     'type': 'object',
                     'properties': {
-                        'path': {'type': 'string'},
                         'group': {'type': 'string', 'default': 'sublime-agent'},
                         'mode': {'type': 'string', 'enum': ['replace', 'upsert'], 'default': 'replace'},
-                        'expected_change_count': {'type': 'integer', 'minimum': 0},
-                        'annotations': {
+                        'files': {
                             'type': 'array',
+                            'minItems': 1,
                             'items': {
                                 'type': 'object',
                                 'properties': {
-                                    'id': {'type': 'string'},
-                                    'line': {'type': 'integer', 'minimum': 1},
-                                    'column': {'type': 'integer', 'minimum': 0, 'default': 0},
-                                    'markdown': {'type': 'string'},
+                                    'path': {'type': 'string'},
+                                    'expected_change_count': {'type': 'integer', 'minimum': 0},
+                                    'annotations': {
+                                        'type': 'array',
+                                        'items': {
+                                            'type': 'object',
+                                            'properties': {
+                                                'id': {'type': 'string'},
+                                                'line': {'type': 'integer', 'minimum': 1},
+                                                'column': {'type': 'integer', 'minimum': 0, 'default': 0},
+                                                'markdown': {'type': 'string'},
+                                            },
+                                            'required': ['id', 'line', 'markdown'],
+                                            'additionalProperties': False,
+                                        },
+                                    },
                                 },
-                                'required': ['id', 'line', 'markdown'],
+                                'required': ['path', 'annotations'],
                                 'additionalProperties': False,
                             },
                         },
                     },
-                    'required': ['path', 'annotations'],
+                    'required': ['files'],
                     'additionalProperties': False,
                 },
             ),
@@ -90,6 +104,46 @@ def dynamic_tool_namespace() -> dict[str, Any]:
                     'properties': {
                         'path': {'type': 'string'},
                         'group': {'type': 'string'},
+                    },
+                    'additionalProperties': False,
+                },
+            ),
+            _function(
+                'list_views',
+                (
+                    'List every text view open in the bound Sublime window, including its stable view_id, '
+                    'absolute path or tab name, group, index, active state, dirty state, and whether this '
+                    'runtime opened it. Call this before closing user-selected tabs.'
+                ),
+                {
+                    'type': 'object',
+                    'properties': {},
+                    'additionalProperties': False,
+                },
+            ),
+            _function(
+                'close_views',
+                (
+                    'Close only clean views in the bound Sublime window. For arbitrary user-selected tabs, '
+                    'call sublime.list_views first and pass their exact view_ids or paths. Omit both fields '
+                    'only to close clean views previously opened by sublime.open_diff. Dirty views are '
+                    'always skipped. Never use Sublime CLI bulk-close commands.'
+                ),
+                {
+                    'type': 'object',
+                    'properties': {
+                        'view_ids': {
+                            'type': 'array',
+                            'items': {'type': 'integer', 'minimum': 0},
+                            'description': 'Exact view IDs returned by sublime.list_views.',
+                        },
+                        'paths': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': (
+                                'Exact absolute paths returned by sublime.list_views or workspace-relative paths.'
+                            ),
+                        },
                     },
                     'additionalProperties': False,
                 },
