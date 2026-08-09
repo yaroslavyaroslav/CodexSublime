@@ -191,6 +191,47 @@ class TranscriptFoldingTests(unittest.TestCase):
         self.assertEqual(len(view.unfolded), 2)
         self.assertEqual(view.folded, [view.unfolded[0]])
 
+    def test_refolds_configured_section_after_headerless_continuation(self) -> None:
+        text = '### Tool call\n\nRequest\n\nResult appended later\n\n'
+        body_start = text.index('\n', text.index('### Tool call'))
+        append_start = text.index('Result appended later')
+        section = FakeRegion(body_start, len(text))
+        view = FakeView(text, [section])
+
+        with (
+            patch('plugin.commands.sublime.Region', FakeRegion, create=True),
+            patch('plugin.commands._get_fold_section_names', return_value={'tool call'}),
+        ):
+            result = commands._refold_configured_continuation(
+                object(),
+                view,
+                [section],
+                append_start,
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(len(view.folded), 1)
+        self.assertEqual(view.folded, view.unfolded)
+        self.assertIn('Result appended later', view.substr(view.folded[0]))
+
+    def test_does_not_refold_unconfigured_continuation(self) -> None:
+        text = '### Tool call\n\nRequest\n\nResult\n'
+        body_start = text.index('\n', text.index('### Tool call'))
+        append_start = text.index('Result')
+        section = FakeRegion(body_start, len(text))
+        view = FakeView(text, [section])
+
+        with patch('plugin.commands._get_fold_section_names', return_value={'command output'}):
+            result = commands._refold_configured_continuation(
+                object(),
+                view,
+                [section],
+                append_start,
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(view.folded, [])
+
 
 if __name__ == '__main__':
     unittest.main()

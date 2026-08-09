@@ -247,6 +247,41 @@ def _section_fold_region(
     return sublime.Region(section.begin(), fold_end)
 
 
+def _section_title(
+    view: sublime.View,  # type: ignore[name-defined]
+    section: sublime.Region,  # type: ignore[name-defined]
+) -> str:
+    header_point = max(0, section.begin() - 1)
+    return view.substr(view.line(header_point)).lstrip('#').strip().lower()
+
+
+def _refold_configured_continuation(
+    window: sublime.Window,  # type: ignore[name-defined]
+    view: sublime.View,  # type: ignore[name-defined]
+    sections: list[sublime.Region],  # type: ignore[name-defined]
+    append_start: int,
+) -> bool | None:
+    """Extend a configured fold after a headerless continuation append.
+
+    ``None`` means syntax scopes have not caught up yet and the caller should
+    retry. ``False`` means the owning section is not configured for folding.
+    """
+
+    section = next(
+        (
+            candidate
+            for candidate in reversed(sections)
+            if candidate.begin() <= append_start <= candidate.end()
+        ),
+        None,
+    )
+    if section is None:
+        return None
+    if _section_title(view, section) not in _get_fold_section_names(window):
+        return False
+    return _fold_section_body(view, section, sections)
+
+
 def restore_configured_folds(
     window: sublime.Window,  # type: ignore[name-defined]
     view: sublime.View,  # type: ignore[name-defined]
@@ -274,9 +309,7 @@ def restore_configured_folds(
             return
 
         for section in sections:
-            header_point = max(0, section.begin() - 1)
-            header = view.substr(view.line(header_point)).lstrip('#').strip().lower()
-            if header in fold_names:
+            if _section_title(view, section) in fold_names:
                 _fold_section_body(view, section, sections)
     except Exception:
         logger.debug('Failed to restore configured transcript folds', exc_info=True)
@@ -315,9 +348,7 @@ def sync_configured_folds(
             if fold_region is None:
                 continue
             view.unfold(fold_region)
-            header_point = max(0, section.begin() - 1)
-            header = view.substr(view.line(header_point)).lstrip('#').strip().lower()
-            if header in fold_names:
+            if _section_title(view, section) in fold_names:
                 view.fold(fold_region)
     except Exception:
         logger.debug('Failed to synchronize configured transcript folds', exc_info=True)
@@ -743,9 +774,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     elif msg_type == 'patch_apply_end':
         header = ''
-        # This event extends the preceding Applying patch section instead of
-        # creating a new heading. Re-fold that section after appending.
-        header_title_for_fold = 'Applying patch'
 
         success = msg.get('success', False)
         stdout = msg.get('stdout', '')
@@ -838,8 +866,13 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     # Auto-fold freshly appended section when configured to do so.
     try:
         fold_names = _get_fold_section_names(window)
-        should_fold = bool(header_title_for_fold and fold_names and header_title_for_fold.strip().lower() in fold_names)
-        if should_fold and pre_size >= 0:
+        is_continuation = not header
+        should_fold = bool(
+            header_title_for_fold
+            and fold_names
+            and header_title_for_fold.strip().lower() in fold_names
+        )
+        if (should_fold or is_continuation) and pre_size >= 0:
             # Defer folding slightly to allow syntax scopes to update, so the
             # new meta.section exists and we don't accidentally fold the previous one.
             def _attempt_fold(tries_left: int = 6) -> None:
@@ -854,6 +887,17 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
                     sections.sort(key=lambda r: r.begin())
                     if not sections:
                         sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
+                        return
+
+                    if is_continuation:
+                        continuation_result = _refold_configured_continuation(
+                            window,
+                            target_view,
+                            sections,
+                            probe,
+                        )
+                        if continuation_result is None:
+                            sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
                         return
 
                     # Chat Markdown scopes the body from the end of its heading
