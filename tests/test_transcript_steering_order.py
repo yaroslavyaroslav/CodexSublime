@@ -87,15 +87,14 @@ class TranscriptSteeringOrderTests(unittest.TestCase):
         }
         commands.PENDING_USER_INPUTS[window.id()] = [('steer me', 'session-1')]
 
-        def append_section(_view, header, body=''):
-            operations.append(('section', header, body))
-            return 0
+        def apply_mutation(_view, mutation, _fold_names):
+            operations.append(('section', mutation.header, mutation.body))
 
         with (
             patch('plugin.commands._get_transcript_view', return_value=view),
             patch('plugin.commands.apply_presentation'),
             patch('plugin.commands._markdown_syntax_resource', return_value='syntax'),
-            patch('plugin.commands.append_markdown_section', side_effect=append_section),
+            patch('plugin.commands.apply_mutation', side_effect=apply_mutation),
             patch('plugin.commands._get_fold_section_names', return_value=set()),
         ):
             commands._display_assistant_response(
@@ -124,15 +123,14 @@ class TranscriptSteeringOrderTests(unittest.TestCase):
         }
         commands.PENDING_USER_INPUTS[window.id()] = [('steer me', 'session-1')]
 
-        def append_section(_view, header, body=''):
-            operations.append(('section', header, body))
-            return 0
+        def apply_mutation(_view, mutation, _fold_names):
+            operations.append(('section', mutation.header, mutation.body))
 
         with (
             patch('plugin.commands._get_transcript_view', return_value=view),
             patch('plugin.commands.apply_presentation'),
             patch('plugin.commands._markdown_syntax_resource', return_value='syntax'),
-            patch('plugin.commands.append_markdown_section', side_effect=append_section),
+            patch('plugin.commands.apply_mutation', side_effect=apply_mutation),
             patch('plugin.commands._get_fold_section_names', return_value=set()),
         ):
             commands._display_assistant_response(

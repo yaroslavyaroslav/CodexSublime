@@ -13,6 +13,18 @@ from .bridge_manager import get_bridge, get_existing_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .input_history import CodexInputHistoryController
 from .sublime_agent_integration import skill_input_items
+from .transcript import (
+    TranscriptItemKind,
+    TranscriptMutation,
+    TranscriptMutationKind,
+)
+from .transcript_runtime import (
+    apply_mutation,
+    invalidate_view,
+    live_item_key,
+    restore_folds,
+    sync_folds,
+)
 from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
@@ -205,90 +217,12 @@ def _get_fold_section_names(window: sublime.Window) -> set[str]:  # type: ignore
     return names
 
 
-def _fold_section_body(
-    view: sublime.View,  # type: ignore[name-defined]
-    section: sublime.Region,  # type: ignore[name-defined]
-    sections: list[sublime.Region],  # type: ignore[name-defined]
-) -> bool:
-    """Fold a section body and its following transcript separator."""
-
-    try:
-        fold_region = _section_fold_region(view, section, sections)
-        if fold_region is not None:
-            # Continuation events can append to a section that is already
-            # folded. Replace that stale fold so the newly appended tail is
-            # included instead of remaining visible beside the heading.
-            view.unfold(fold_region)
-            view.fold(fold_region)
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def _section_fold_region(
-    view: sublime.View,  # type: ignore[name-defined]
-    section: sublime.Region,  # type: ignore[name-defined]
-    sections: list[sublime.Region],  # type: ignore[name-defined]
-) -> sublime.Region | None:  # type: ignore[name-defined]
-    fold_end = section.end()
-    next_section = next(
-        (candidate for candidate in sections if candidate.begin() > section.begin()),
-        None,
-    )
-    if next_section is not None:
-        next_header = view.line(max(0, next_section.begin() - 1))
-        # Leave the final newline before the next heading visible. This keeps
-        # that heading on its own row while hiding the hard Markdown separator.
-        fold_end = max(fold_end, next_header.begin() - 1)
-
-    if section.begin() >= fold_end:
-        return None
-    return sublime.Region(section.begin(), fold_end)
-
-
-def _section_title(
-    view: sublime.View,  # type: ignore[name-defined]
-    section: sublime.Region,  # type: ignore[name-defined]
-) -> str:
-    header_point = max(0, section.begin() - 1)
-    return view.substr(view.line(header_point)).lstrip('#').strip().lower()
-
-
-def _refold_configured_continuation(
-    window: sublime.Window,  # type: ignore[name-defined]
-    view: sublime.View,  # type: ignore[name-defined]
-    sections: list[sublime.Region],  # type: ignore[name-defined]
-    append_start: int,
-) -> bool | None:
-    """Extend a configured fold after a headerless continuation append.
-
-    ``None`` means syntax scopes have not caught up yet and the caller should
-    retry. ``False`` means the owning section is not configured for folding.
-    """
-
-    section = next(
-        (
-            candidate
-            for candidate in reversed(sections)
-            if candidate.begin() <= append_start <= candidate.end()
-        ),
-        None,
-    )
-    if section is None:
-        return None
-    if _section_title(view, section) not in _get_fold_section_names(window):
-        return False
-    return _fold_section_body(view, section, sections)
-
-
 def restore_configured_folds(
     window: sublime.Window,  # type: ignore[name-defined]
     view: sublime.View,  # type: ignore[name-defined]
     tries_left: int = 6,
 ) -> None:
-    fold_names = _get_fold_section_names(window)
-    if not fold_names or tries_left <= 0:
+    if tries_left <= 0:
         return
 
     try:
@@ -299,18 +233,7 @@ def restore_configured_folds(
             )
             return
 
-        sections = view.find_by_selector('meta.section')
-        sections.sort(key=lambda region: region.begin())
-        if not sections:
-            sublime.set_timeout(
-                lambda: restore_configured_folds(window, view, tries_left - 1),
-                50,
-            )
-            return
-
-        for section in sections:
-            if _section_title(view, section) in fold_names:
-                _fold_section_body(view, section, sections)
+        restore_folds(view, _get_fold_section_names(window))
     except Exception:
         logger.debug('Failed to restore configured transcript folds', exc_info=True)
 
@@ -333,23 +256,7 @@ def sync_configured_folds(
             )
             return
 
-        sections = view.find_by_selector('meta.section')
-        sections.sort(key=lambda region: region.begin())
-        if not sections:
-            sublime.set_timeout(
-                lambda: sync_configured_folds(window, view, tries_left - 1),
-                50,
-            )
-            return
-
-        fold_names = _get_fold_section_names(window)
-        for section in sections:
-            fold_region = _section_fold_region(view, section, sections)
-            if fold_region is None:
-                continue
-            view.unfold(fold_region)
-            if _section_title(view, section) in fold_names:
-                view.fold(fold_region)
+        sync_folds(view, _get_fold_section_names(window))
     except Exception:
         logger.debug('Failed to synchronize configured transcript folds', exc_info=True)
 
@@ -383,6 +290,75 @@ def _format_patch_changes(changes: dict) -> str:
                 body += f'```diff\n{unified_diff}\n```\n\n'
 
     return body
+
+
+_ITEM_LIFECYCLE: dict[
+    str,
+    tuple[TranscriptItemKind, TranscriptMutationKind],
+] = {
+    'exec_command_begin': (
+        TranscriptItemKind.COMMAND_EXECUTION,
+        TranscriptMutationKind.CREATE,
+    ),
+    'exec_command_end': (
+        TranscriptItemKind.COMMAND_EXECUTION,
+        TranscriptMutationKind.FINALIZE,
+    ),
+    'mcp_tool_call_begin': (
+        TranscriptItemKind.MCP_TOOL_CALL,
+        TranscriptMutationKind.CREATE,
+    ),
+    'mcp_tool_call_end': (
+        TranscriptItemKind.MCP_TOOL_CALL,
+        TranscriptMutationKind.FINALIZE,
+    ),
+    'patch_apply_begin': (
+        TranscriptItemKind.FILE_CHANGE,
+        TranscriptMutationKind.CREATE,
+    ),
+    'patch_apply_end': (
+        TranscriptItemKind.FILE_CHANGE,
+        TranscriptMutationKind.FINALIZE,
+    ),
+}
+
+
+def _transcript_mutation(
+    event: dict,
+    session_id: str,
+    msg_type: str,
+    header: str,
+    body: str,
+) -> TranscriptMutation:
+    lifecycle = _ITEM_LIFECYCLE.get(msg_type)
+    if lifecycle is not None:
+        key = live_item_key(session_id, event.get('id'))
+        if key is not None:
+            item_kind, mutation_kind = lifecycle
+            return TranscriptMutation(
+                kind=mutation_kind,
+                key=key,
+                item_kind=item_kind,
+                header=header or None,
+                body=body,
+            )
+
+    fallback_header = header
+    if not fallback_header:
+        fallback_header = f'### {msg_type}\n\n'
+    fallback_key = live_item_key(session_id, uuid.uuid4().hex)
+    assert fallback_key is not None
+    return TranscriptMutation(
+        kind=TranscriptMutationKind.FINALIZE,
+        key=fallback_key,
+        item_kind=(
+            TranscriptItemKind.MESSAGE
+            if msg_type in {'user_input', 'agent_message', 'agent_reasoning'}
+            else TranscriptItemKind.OTHER
+        ),
+        header=fallback_header,
+        body=body,
+    )
 
 
 def _display_assistant_response(window: sublime.Window, prompt: str, event: dict, session_id: str) -> None:  # type: ignore[name-defined]
@@ -440,13 +416,10 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         return
 
     body = ''
-    header_title_for_fold: str | None = None  # extracted header label for auto-folding
     if msg_type == 'task_started':
         header = '## Task started\n\n'
-        header_title_for_fold = 'Task started'
     elif msg_type == 'exec_command_begin':
         header = '### Command Call\n\n'
-        header_title_for_fold = 'Command Call'
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
         cwd_line = ''
@@ -468,7 +441,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         # to the Codex backend, otherwise it will keep waiting for ever.
 
         header = '### exec_approval\n\n'
-        header_title_for_fold = 'exec_approval'
 
         cmd_list = msg.get('command', [])
         cmd_str = ' '.join(cmd_list) if isinstance(cmd_list, list) else str(cmd_list)
@@ -531,7 +503,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     elif msg_type == 'exec_command_end':
         header = '### Command Output\n\n'
-        header_title_for_fold = 'Command Output'
         exit_code = msg.get('exit_code', 0)
         stderr = msg.get('stderr', '')
         stdout = msg.get('stdout', '')
@@ -554,7 +525,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
     elif msg_type == 'mcp_tool_call_begin':
         # Display information about the tool invocation in a concise form.
         header = '### Tool call\n\n'
-        header_title_for_fold = 'Tool call'
 
         # Prefer the canonical Codex schema: `invocation.{server, tool, arguments}`
         invocation = msg.get('invocation') if isinstance(msg.get('invocation'), dict) else None
@@ -716,7 +686,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     elif msg_type == 'apply_patch_approval_request':
         header = '### Apply changes?\n\n'
-        header_title_for_fold = 'apply_patch_approval'
 
         body += _format_patch_changes(msg.get('changes', {}))
 
@@ -765,7 +734,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     elif msg_type == 'patch_apply_begin':
         header = '### Applying patch\n\n'
-        header_title_for_fold = 'Applying patch'
 
         auto_approved = msg.get('auto_approved', False)
         body = f'`auto_approved`: {auto_approved}\n\n'
@@ -789,19 +757,16 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     elif msg_type == 'exec_approval_result':
         header = '### exec_approval_result\n\n'
-        header_title_for_fold = 'exec_approval_result'
         decision = str(msg.get('decision', 'unknown'))
         body = f'`decision`: `{decision}`\n\n'
 
     elif msg_type == 'apply_patch_approval_result':
         header = '### apply_patch_approval_result\n\n'
-        header_title_for_fold = 'apply_patch_approval_result'
         decision = str(msg.get('decision', 'unknown'))
         body = f'`decision`: `{decision}`\n\n'
 
     elif msg_type == 'error':
         header = '### Error\n\n'
-        header_title_for_fold = 'error'
         reason = msg.get('reason')
         message = msg.get('message') or msg.get('text')
         protocol = msg.get('protocol')
@@ -822,12 +787,6 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         header = (
             f'## {msg_type}\n\n' if msg_type in ['user_input', 'agent_message'] else f'### {msg_type}\n\n'
         )
-        try:
-            # Remove leading hashes and whitespace to get a readable title.
-            header_line = header.splitlines()[0]
-            header_title_for_fold = header_line.lstrip('#').strip()
-        except Exception:
-            header_title_for_fold = None
         text = _extract_text(msg)
         if text:
             body = f'{text}\n\n'
@@ -861,69 +820,8 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         except Exception:
             pre_size = 0
 
-    header_start = append_markdown_section(target_view, header, body)
-
-    # Auto-fold freshly appended section when configured to do so.
-    try:
-        fold_names = _get_fold_section_names(window)
-        is_continuation = not header
-        should_fold = bool(
-            header_title_for_fold
-            and fold_names
-            and header_title_for_fold.strip().lower() in fold_names
-        )
-        if (should_fold or is_continuation) and pre_size >= 0:
-            # Defer folding slightly to allow syntax scopes to update, so the
-            # new meta.section exists and we don't accidentally fold the previous one.
-            def _attempt_fold(tries_left: int = 6) -> None:
-                try:
-                    if tries_left <= 0 or target_view.is_loading():
-                        return
-                    # Determine the start of the newly added header.
-                    probe = header_start
-
-                    sections = target_view.find_by_selector('meta.section')
-                    # Work with sections sorted by start
-                    sections.sort(key=lambda r: r.begin())
-                    if not sections:
-                        sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
-                        return
-
-                    if is_continuation:
-                        continuation_result = _refold_configured_continuation(
-                            window,
-                            target_view,
-                            sections,
-                            probe,
-                        )
-                        if continuation_result is None:
-                            sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
-                        return
-
-                    # Chat Markdown scopes the body from the end of its heading
-                    # line up to (but not including) the transcript separator.
-                    header_line = target_view.line(probe)
-                    header_line_begin = header_line.begin()
-                    exact = [r for r in sections if r.begin() == header_line.end()]
-                    if exact:
-                        if _fold_section_body(target_view, exact[0], sections):
-                            return
-
-                    # Fallback: fold the last section (highest begin) – most likely the new one.
-                    last = sections[-1]
-                    if last.contains(probe) or last.begin() >= header_line_begin:
-                        if _fold_section_body(target_view, last, sections):
-                            return
-
-                    # If scopes are still stale, retry shortly.
-                    sublime.set_timeout(lambda: _attempt_fold(tries_left - 1), 50)
-                except Exception:
-                    pass
-
-            sublime.set_timeout(_attempt_fold, 30)
-    except Exception:
-        # Never let folding errors break output updates.
-        pass
+    mutation = _transcript_mutation(event, session_id, msg_type, header, body)
+    apply_mutation(target_view, mutation, _get_fold_section_names(window))
 
     if not is_panel and will_follow_tail:
         # Only auto-scroll in the transcript tab when the caret was at the
@@ -995,6 +893,15 @@ def _append_agent_message_delta(
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
+
+
+class CodexApplyTranscriptEditCommand(sublime_plugin.TextCommand):
+    """Apply one validated transcript projection edit on Sublime's edit thread."""
+
+    def run(self, edit: sublime.Edit, begin: int, end: int, text: str) -> None:  # type: ignore[name-defined]
+        if begin < 0 or end < begin or end > self.view.size():
+            raise ValueError(f'Invalid transcript edit region: {begin}:{end}')
+        self.view.replace(edit, sublime.Region(begin, end), text)
 
 
 class CodexPromptCommand(sublime_plugin.TextCommand):
@@ -1374,11 +1281,13 @@ class CodexResetChatCommand(sublime_plugin.WindowCommand):
         # 2. Clear transcript view
         transcript = _get_transcript_view(self.window)
         if transcript is not None:
+            invalidate_view(transcript)
             clear_view(transcript)
 
         # 3. Clear output panel
         panel_view = self.window.find_output_panel('codex')
         if panel_view is not None:
+            invalidate_view(panel_view)
             clear_view(panel_view)
 
         # 4. Remove persisted session_id (if any) so that the next prompt

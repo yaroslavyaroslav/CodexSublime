@@ -1,4 +1,5 @@
 from .plugin.commands import (  # noqa: E402
+    CodexApplyTranscriptEditCommand,  # noqa: E402, F401
     CodexCancelInputPanelCommand,  # noqa: E402, F401
     CodexCancelInputPanelFromViewCommand,  # noqa: E402, F401
     CodexInputHistoryNextCommand,  # noqa: E402, F401
