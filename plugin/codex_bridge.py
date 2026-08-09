@@ -20,7 +20,7 @@ from .sublime_agent_integration import explain_diff_skill_root
 from .vendor.sublime_agent_tools import SublimeToolRuntime, dynamic_tool_namespace
 
 logger = logging.getLogger(__name__)
-AGENT_TOOLS_VERSION = 1
+AGENT_TOOLS_VERSION = 2
 
 
 def _is_debug_logging_enabled() -> bool:

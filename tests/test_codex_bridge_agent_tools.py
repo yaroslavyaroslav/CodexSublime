@@ -74,7 +74,7 @@ class CodexBridgeAgentToolTests(unittest.TestCase):
         self.assertEqual(params['dynamicTools'][0]['name'], 'sublime')
         self.assertEqual(
             [tool['name'] for tool in params['dynamicTools'][0]['tools']],
-            ['open_diff', 'set_annotations', 'clear_annotations', 'close_views'],
+            ['open_diff', 'set_annotations', 'clear_annotations', 'list_views', 'close_views'],
         )
 
     def test_normalizes_skill_turn_input(self) -> None:
