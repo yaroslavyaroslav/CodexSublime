@@ -18,6 +18,8 @@ Keep long incident history in `SESSION_NOTES.md`.
     - `~/Library/Application Support/Sublime Text/Installed Packages/Codex*`
 - Keep `main.py` minimal and stable (imports + command registration). Avoid
   temporary debug wrappers unless actively diagnosing load failures.
+- Never use the Ctrl-backtick shortcut to open the Sublime Text console; Ghostty
+  intercepts it as a global shortcut. Use the Sublime menu or command API.
 - Approval flow must be handled from server requests, not notification clones.
 - Keep transcript user-facing; suppress noisy infra/delta events by default.
 - Debug trace logs must respect `log_level = "debug"`.
@@ -49,4 +51,3 @@ Keep long incident history in `SESSION_NOTES.md`.
 - Current versioning convention for this repo release cycle:
   - plugin `1.x.y` tracks codex-cli `0.x.y`.
 - Add release note files under `messages/<version>.md` and register in `messages.json`.
-
