@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 
 if 'sublime' not in sys.modules:
@@ -25,6 +26,21 @@ class FakeRuntime:
 
 
 class CodexBridgeAgentToolTests(unittest.TestCase):
+    def test_registers_canonical_skill_root_with_app_server(self) -> None:
+        bridge = object.__new__(_CodexBridge)
+        bridge._trace = lambda *_args: None
+        requests = []
+        bridge._send_request_sync = lambda method, params, timeout: requests.append(
+            (method, params, timeout)
+        ) or {}
+
+        with patch('plugin.codex_bridge.explain_diff_skill_root', return_value='/skills'):
+            bridge._register_agent_skill_roots()
+
+        self.assertEqual(requests, [(
+            'skills/extraRoots/set', {'extraRoots': ['/skills']}, 20.0,
+        )])
+
     def test_starts_new_thread_with_dynamic_tool_namespace(self) -> None:
         bridge = object.__new__(_CodexBridge)
         bridge._session_id = None

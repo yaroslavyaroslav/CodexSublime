@@ -24,7 +24,9 @@ def materialize_explain_diff_skill() -> str:
     """Return a filesystem path even when the plugin is loaded from an archive."""
 
     relative = os.path.join('vendor', 'sublime_agent_tools', 'skills', SKILL_NAME, 'SKILL.md')
-    source_path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative))
+    # app-server resolves discovered skill paths before comparing structured
+    # skill input items, so a Sublime Packages symlink must not leak here.
+    source_path = os.path.realpath(os.path.join(os.path.dirname(__file__), relative))
     if os.path.isfile(source_path):
         return source_path
 
@@ -44,6 +46,12 @@ def materialize_explain_diff_skill() -> str:
         with open(target_path, 'w', encoding='utf-8', newline='\n') as skill_file:
             skill_file.write(contents)
     return target_path
+
+
+def explain_diff_skill_root() -> str:
+    """Return the skill collection root expected by skills/extraRoots/set."""
+
+    return os.path.dirname(os.path.dirname(materialize_explain_diff_skill()))
 
 
 def skill_input_items(prompt: str) -> list[dict[str, str]]:

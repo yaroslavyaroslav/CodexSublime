@@ -16,6 +16,7 @@ from typing import Any
 
 import sublime
 
+from .sublime_agent_integration import explain_diff_skill_root
 from .vendor.sublime_agent_tools import SublimeToolRuntime, dynamic_tool_namespace
 
 logger = logging.getLogger(__name__)
@@ -317,6 +318,7 @@ class _CodexBridge:
             self._trace('bootstrap: initialize ok')
             self._send_json({'method': 'initialized'})
             self._trace('bootstrap: initialized sent')
+            self._register_agent_skill_roots()
 
             conversation_id = self._bootstrap_modern_protocol()
             if conversation_id:
@@ -345,6 +347,22 @@ class _CodexBridge:
                     kill_process_tree(self.proc.pid)
             except Exception:
                 pass
+
+    def _register_agent_skill_roots(self) -> None:
+        skill_root = explain_diff_skill_root()
+        try:
+            self._send_request_sync(
+                'skills/extraRoots/set',
+                {'extraRoots': [skill_root]},
+                timeout=20.0,
+            )
+            self._trace('bootstrap: skill root registered path=%s', skill_root)
+        except Exception as exc:
+            # Keep the core chat usable with app-server versions that predate
+            # process-scoped skill roots; explicit skill turns will then fall
+            # back to their ordinary text prompt.
+            logger.warning('Failed to register Sublime agent skill root %s: %s', skill_root, exc)
+            self._trace('bootstrap: skill root registration failed path=%s error=%s', skill_root, exc)
 
     def _request_key(self, request_id: Any) -> str:
         return str(request_id)

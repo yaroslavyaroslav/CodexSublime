@@ -12,6 +12,7 @@ if 'sublime' not in sys.modules:
 
 from plugin.sublime_agent_integration import (
     SKILL_NAME,
+    explain_diff_skill_root,
     skill_input_items,
     should_attach_explain_diff_skill,
 )
@@ -30,6 +31,11 @@ class SublimeAgentIntegrationTests(unittest.TestCase):
         self.assertEqual(items[0]['type'], 'skill')
         self.assertEqual(items[0]['name'], SKILL_NAME)
         self.assertTrue(os.path.isfile(items[0]['path']))
+        self.assertEqual(items[0]['path'], os.path.realpath(items[0]['path']))
+        self.assertEqual(
+            explain_diff_skill_root(),
+            os.path.dirname(os.path.dirname(items[0]['path'])),
+        )
 
 
 if __name__ == '__main__':
