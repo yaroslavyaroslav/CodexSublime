@@ -13,10 +13,9 @@ from .bridge_manager import get_bridge, get_existing_bridge
 from .chat_syntax import TRANSCRIPT_VIEW_FLAG
 from .input_history import CodexInputHistoryController
 from .sublime_agent_integration import skill_input_items
-from .transcript import (
-    TranscriptItemKind,
-    TranscriptMutation,
-    TranscriptMutationKind,
+from .vendor.sublime_chat_ui.sections import (
+    SectionMutation,
+    SectionMutationKind,
 )
 from .transcript_runtime import (
     apply_mutation,
@@ -292,34 +291,13 @@ def _format_patch_changes(changes: dict) -> str:
     return body
 
 
-_ITEM_LIFECYCLE: dict[
-    str,
-    tuple[TranscriptItemKind, TranscriptMutationKind],
-] = {
-    'exec_command_begin': (
-        TranscriptItemKind.COMMAND_EXECUTION,
-        TranscriptMutationKind.CREATE,
-    ),
-    'exec_command_end': (
-        TranscriptItemKind.COMMAND_EXECUTION,
-        TranscriptMutationKind.FINALIZE,
-    ),
-    'mcp_tool_call_begin': (
-        TranscriptItemKind.MCP_TOOL_CALL,
-        TranscriptMutationKind.CREATE,
-    ),
-    'mcp_tool_call_end': (
-        TranscriptItemKind.MCP_TOOL_CALL,
-        TranscriptMutationKind.FINALIZE,
-    ),
-    'patch_apply_begin': (
-        TranscriptItemKind.FILE_CHANGE,
-        TranscriptMutationKind.CREATE,
-    ),
-    'patch_apply_end': (
-        TranscriptItemKind.FILE_CHANGE,
-        TranscriptMutationKind.FINALIZE,
-    ),
+_ITEM_LIFECYCLE: dict[str, SectionMutationKind] = {
+    'exec_command_begin': SectionMutationKind.CREATE,
+    'exec_command_end': SectionMutationKind.FINALIZE,
+    'mcp_tool_call_begin': SectionMutationKind.CREATE,
+    'mcp_tool_call_end': SectionMutationKind.FINALIZE,
+    'patch_apply_begin': SectionMutationKind.CREATE,
+    'patch_apply_end': SectionMutationKind.FINALIZE,
 }
 
 
@@ -329,16 +307,14 @@ def _transcript_mutation(
     msg_type: str,
     header: str,
     body: str,
-) -> TranscriptMutation:
+) -> SectionMutation:
     lifecycle = _ITEM_LIFECYCLE.get(msg_type)
     if lifecycle is not None:
         key = live_item_key(session_id, event.get('id'))
         if key is not None:
-            item_kind, mutation_kind = lifecycle
-            return TranscriptMutation(
-                kind=mutation_kind,
+            return SectionMutation(
+                kind=lifecycle,
                 key=key,
-                item_kind=item_kind,
                 header=header or None,
                 body=body,
             )
@@ -348,14 +324,9 @@ def _transcript_mutation(
         fallback_header = f'### {msg_type}\n\n'
     fallback_key = live_item_key(session_id, uuid.uuid4().hex)
     assert fallback_key is not None
-    return TranscriptMutation(
-        kind=TranscriptMutationKind.FINALIZE,
+    return SectionMutation(
+        kind=SectionMutationKind.FINALIZE,
         key=fallback_key,
-        item_kind=(
-            TranscriptItemKind.MESSAGE
-            if msg_type in {'user_input', 'agent_message', 'agent_reasoning'}
-            else TranscriptItemKind.OTHER
-        ),
         header=fallback_header,
         body=body,
     )

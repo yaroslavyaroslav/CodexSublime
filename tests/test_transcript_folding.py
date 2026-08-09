@@ -20,14 +20,13 @@ if 'sublime_plugin' not in sys.modules:
 
 from plugin import commands, lifecycle
 from plugin.chat_syntax import TRANSCRIPT_VIEW_FLAG
-from plugin.transcript import (
-    TranscriptDocument,
-    TranscriptItemKey,
-    TranscriptItemKind,
-    TranscriptMutation,
-    TranscriptMutationKind,
-    parse_blocks,
-    serialize_block,
+from plugin.vendor.sublime_chat_ui.sections import (
+    SectionDocument,
+    SectionKey,
+    SectionMutation,
+    SectionMutationKind,
+    parse_sections,
+    serialize_section,
 )
 from plugin.transcript_runtime import FoldController, apply_mutation, clear_sessions, reconcile_folds
 
@@ -163,13 +162,13 @@ class TranscriptFoldingTests(unittest.TestCase):
             '----------\n\n## agent_message\n\nAnswer\n\n'
         )
 
-        blocks = parse_blocks(text)
+        blocks = parse_sections(text)
 
         self.assertEqual([block.title for block in blocks], ['Tool call', 'agent_message'])
         self.assertIn('### nested heading', blocks[0].text)
 
     def test_serializer_keeps_separator_outside_fold_and_leaves_guard_newline(self) -> None:
-        rendered = serialize_block('### Command Output\n\n', 'stdout\n')
+        rendered = serialize_section('### Command Output\n\n', 'stdout\n')
         fold = rendered.layout.fold
 
         self.assertIsNotNone(fold)
@@ -229,32 +228,30 @@ class TranscriptFoldingTests(unittest.TestCase):
 
     def test_manual_open_override_survives_policy_reapplication(self) -> None:
         text = '----------\n\n### Tool call\n\nPayload\n\n'
-        block = parse_blocks(text)[0]
+        block = parse_sections(text)[0]
         view = FakeView(text)
         controller = FoldController()
 
         with patch('plugin.transcript_runtime.sublime.Region', FakeRegion, create=True):
-            controller.apply(view, [block], {'tool call'})
+            controller.apply(view, [block], {'tool call'}, FakeRegion)
             view.folded.clear()  # user unfolds through Sublime
-            controller.reconcile(view, [block])
-            controller.apply(view, [block], {'tool call'})
+            controller.reconcile(view, [block], FakeRegion)
+            controller.apply(view, [block], {'tool call'}, FakeRegion)
 
         self.assertEqual(view.folded, [])
 
     def test_started_and_completed_share_one_typed_block(self) -> None:
-        document = TranscriptDocument()
-        key = TranscriptItemKey(conversation_id='thread', item_id='call-1')
-        started = TranscriptMutation(
-            kind=TranscriptMutationKind.CREATE,
+        document = SectionDocument()
+        key = SectionKey(namespace='thread', item_id='call-1')
+        started = SectionMutation(
+            kind=SectionMutationKind.CREATE,
             key=key,
-            item_kind=TranscriptItemKind.COMMAND_EXECUTION,
             header='### Command Call\n\n',
             body='```bash\necho ok\n```\n\n',
         )
-        completed = TranscriptMutation(
-            kind=TranscriptMutationKind.FINALIZE,
+        completed = SectionMutation(
+            kind=SectionMutationKind.FINALIZE,
             key=key,
-            item_kind=TranscriptItemKind.COMMAND_EXECUTION,
             header='### Command Output\n\n',
             body='```\nok\n```\n\n',
         )
@@ -269,17 +266,16 @@ class TranscriptFoldingTests(unittest.TestCase):
         self.assertIn('\nok\n', document.blocks[0].text)
 
     def test_out_of_order_completion_does_not_reorder_blocks(self) -> None:
-        document = TranscriptDocument()
+        document = SectionDocument()
         keys = [
-            TranscriptItemKey(conversation_id='thread', item_id=item_id)
+            SectionKey(namespace='thread', item_id=item_id)
             for item_id in ('a', 'b')
         ]
         for key in keys:
             document.reduce(
-                TranscriptMutation(
-                    kind=TranscriptMutationKind.CREATE,
+                SectionMutation(
+                    kind=SectionMutationKind.CREATE,
                     key=key,
-                    item_kind=TranscriptItemKind.MCP_TOOL_CALL,
                     header='### Tool call\n\n',
                     body=key.item_id,
                 ),
@@ -288,10 +284,9 @@ class TranscriptFoldingTests(unittest.TestCase):
 
         for key in reversed(keys):
             document.reduce(
-                TranscriptMutation(
-                    kind=TranscriptMutationKind.FINALIZE,
+                SectionMutation(
+                    kind=SectionMutationKind.FINALIZE,
                     key=key,
-                    item_kind=TranscriptItemKind.MCP_TOOL_CALL,
                     header=None,
                     body=' done',
                 ),
@@ -303,18 +298,16 @@ class TranscriptFoldingTests(unittest.TestCase):
     def test_runtime_replaces_live_tool_block_and_folds_only_its_body(self) -> None:
         view = FakeView('')
         FakeWindow([view])
-        key = TranscriptItemKey(conversation_id='thread', item_id='call-1')
-        started = TranscriptMutation(
-            kind=TranscriptMutationKind.CREATE,
+        key = SectionKey(namespace='thread', item_id='call-1')
+        started = SectionMutation(
+            kind=SectionMutationKind.CREATE,
             key=key,
-            item_kind=TranscriptItemKind.COMMAND_EXECUTION,
             header='### Command Call\n\n',
             body='```bash\necho ok\n```\n\n',
         )
-        completed = TranscriptMutation(
-            kind=TranscriptMutationKind.FINALIZE,
+        completed = SectionMutation(
+            kind=SectionMutationKind.FINALIZE,
             key=key,
-            item_kind=TranscriptItemKind.COMMAND_EXECUTION,
             header='### Command Output\n\n',
             body='```\nok\n```\n\n',
         )
