@@ -21,7 +21,11 @@ if 'sublime_plugin' not in sys.modules:
     sys.modules['sublime_plugin'] = sublime_plugin
 
 from plugin.chat_syntax import TRANSCRIPT_VIEW_FLAG
-from plugin.commands import CodexInputPanelEventListener
+from plugin.commands import (
+    CodexInputPanelEventListener,
+    CodexStopExecutionCommand,
+    CodexTurnRunningContextEventListener,
+)
 from plugin.vendor.sublime_chat_ui.links import MarkdownLink
 
 
@@ -93,6 +97,36 @@ class TranscriptLinkNavigationTests(unittest.TestCase):
             '/workspace/source.py:12', sublime.ENCODED_POSITION, 1,
         )])
         self.assertFalse(window.opened[0][1] & sublime.FORCE_GROUP)
+
+
+class StopExecutionTests(unittest.TestCase):
+    def test_running_context_uses_only_active_windows_bridge(self) -> None:
+        window = FakeWindow()
+        view = FakeView(window)
+        bridge = types.SimpleNamespace(is_turn_active=lambda: True)
+
+        with patch('plugin.commands.get_existing_bridge', return_value=bridge) as lookup:
+            result = CodexTurnRunningContextEventListener().on_query_context(
+                view, 'codex_turn_running', 0, True, False,
+            )
+
+        self.assertTrue(result)
+        lookup.assert_called_once_with(window)
+
+    def test_stop_command_interrupts_only_active_windows_bridge(self) -> None:
+        window = FakeWindow()
+        view = FakeView(window)
+        bridge = types.SimpleNamespace(interrupt_active_turn=lambda: True)
+        command = object.__new__(CodexStopExecutionCommand)
+        command.view = view
+
+        with (
+            patch('plugin.commands.get_existing_bridge', return_value=bridge) as lookup,
+            patch('plugin.commands.sublime.status_message', create=True),
+        ):
+            command.run(None)
+
+        lookup.assert_called_once_with(window)
 
 
 if __name__ == '__main__':

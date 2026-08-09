@@ -44,6 +44,16 @@ class BridgeManagerTests(unittest.TestCase):
         self.assertIs(requested_window, bridge.window)
         self.assertIs(bridge, bridge_manager.bridges[7])
 
+    def test_existing_bridge_lookup_does_not_create_one(self) -> None:
+        requested_window = FakeWindow(7)
+
+        self.assertIsNone(bridge_manager.get_existing_bridge(requested_window))
+        self.assertEqual(bridge_manager.bridges, {})
+
+        bridge = bridge_manager.get_bridge(requested_window)
+
+        self.assertIs(bridge_manager.get_existing_bridge(requested_window), bridge)
+
 
 if __name__ == '__main__':
     unittest.main()

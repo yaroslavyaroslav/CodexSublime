@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import types
 import unittest
 from unittest.mock import patch
@@ -26,6 +27,17 @@ class FakeRuntime:
 
 
 class CodexBridgeAgentToolTests(unittest.TestCase):
+    @staticmethod
+    def active_bridge(protocol='threads'):
+        bridge = object.__new__(_CodexBridge)
+        bridge._protocol = protocol
+        bridge._session_id = 'thread-1'
+        bridge._state_lock = threading.Lock()
+        bridge._active_msg_id = 'message-1'
+        bridge._active_turn_id = None
+        bridge._interrupt_requested = False
+        return bridge
+
     def test_registers_canonical_skill_root_with_app_server(self) -> None:
         bridge = object.__new__(_CodexBridge)
         bridge._trace = lambda *_args: None
@@ -60,6 +72,10 @@ class CodexBridgeAgentToolTests(unittest.TestCase):
         self.assertEqual(timeout, 20.0)
         self.assertEqual(params['cwd'], '/workspace')
         self.assertEqual(params['dynamicTools'][0]['name'], 'sublime')
+        self.assertEqual(
+            [tool['name'] for tool in params['dynamicTools'][0]['tools']],
+            ['open_diff', 'set_annotations', 'clear_annotations', 'close_views'],
+        )
 
     def test_normalizes_skill_turn_input(self) -> None:
         bridge = object.__new__(_CodexBridge)
@@ -96,6 +112,49 @@ class CodexBridgeAgentToolTests(unittest.TestCase):
         self.assertEqual(responses, [(9, {
             'contentItems': [{'type': 'inputText', 'text': 'opened'}], 'success': True,
         })])
+
+    def test_interrupts_active_turn_for_this_bridge(self) -> None:
+        bridge = self.active_bridge()
+        requests = []
+        bridge._send_request_async = lambda method, params, **callbacks: requests.append(
+            (method, params)
+        )
+        bridge._record_active_turn({'id': 'turn-1'})
+
+        self.assertTrue(bridge.interrupt_active_turn())
+        self.assertEqual(requests, [(
+            'turn/interrupt', {'threadId': 'thread-1', 'turnId': 'turn-1'},
+        )])
+
+    def test_defers_interrupt_until_turn_start_returns_id(self) -> None:
+        bridge = self.active_bridge()
+        requests = []
+        bridge._send_request_async = lambda method, params, **callbacks: requests.append(
+            (method, params)
+        )
+
+        self.assertTrue(bridge.interrupt_active_turn())
+        self.assertEqual(requests, [])
+
+        bridge._record_active_turn({'id': 'turn-1'})
+        self.assertEqual(requests, [(
+            'turn/interrupt', {'threadId': 'thread-1', 'turnId': 'turn-1'},
+        )])
+
+        bridge._record_active_turn({'id': 'turn-1'})
+        self.assertEqual(len(requests), 1)
+
+    def test_interrupts_legacy_conversation(self) -> None:
+        bridge = self.active_bridge(protocol='legacy')
+        requests = []
+        bridge._send_request_async = lambda method, params, **callbacks: requests.append(
+            (method, params)
+        )
+
+        self.assertTrue(bridge.interrupt_active_turn())
+        self.assertEqual(requests, [(
+            'interruptConversation', {'conversationId': 'thread-1'},
+        )])
 
 
 if __name__ == '__main__':

@@ -240,6 +240,8 @@ class _CodexBridge:
         self._rpc_waiters: dict[str, dict[str, Any]] = {}
         self._callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
         self._active_msg_id: str | None = None
+        self._active_turn_id: str | None = None
+        self._interrupt_requested = False
         self._last_msg_id: str | None = None
         self._last_cb: Callable[[dict[str, Any]], None] | None = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
@@ -297,6 +299,55 @@ class _CodexBridge:
                 self._pending.append((obj, cb))
             return
         self._send_now(obj, cb)
+
+    def is_turn_active(self) -> bool:
+        with self._state_lock:
+            return self._active_msg_id is not None
+
+    def interrupt_active_turn(self) -> bool:
+        with self._state_lock:
+            if self._active_msg_id is None:
+                return False
+            if self._interrupt_requested:
+                return True
+            self._interrupt_requested = True
+            turn_id = self._active_turn_id
+
+        if self._protocol == 'threads':
+            if turn_id:
+                self._send_turn_interrupt(turn_id)
+        else:
+            self._send_request_async(
+                'interruptConversation',
+                {'conversationId': self._session_id},
+                on_error=self._handle_interrupt_error,
+            )
+        return True
+
+    def _record_active_turn(self, raw_turn: Any) -> None:
+        if not isinstance(raw_turn, dict):
+            return
+        turn_id = raw_turn.get('id')
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        with self._state_lock:
+            should_interrupt = self._interrupt_requested and self._active_turn_id != turn_id
+            self._active_turn_id = turn_id
+        if should_interrupt:
+            self._send_turn_interrupt(turn_id)
+
+    def _send_turn_interrupt(self, turn_id: str) -> None:
+        self._send_request_async(
+            'turn/interrupt',
+            {'threadId': self._session_id, 'turnId': turn_id},
+            on_error=self._handle_interrupt_error,
+        )
+
+    def _handle_interrupt_error(self, error: Any) -> None:
+        with self._state_lock:
+            self._interrupt_requested = False
+        logger.error('Failed to interrupt active Codex turn: %s', error)
+        sublime.status_message('Failed to stop Codex turn')
 
     def _bootstrap_session(self) -> None:
         try:
@@ -628,6 +679,10 @@ class _CodexBridge:
 
     def _handle_v2_notification(self, method: str, params: dict[str, Any]) -> None:
         event: dict[str, Any] | None = None
+
+        if method == 'turn/started':
+            self._record_active_turn(params.get('turn'))
+            return
 
         if method == 'item/agentMessage/delta':
             item_id = str(params.get('itemId') or '')
@@ -987,6 +1042,7 @@ class _CodexBridge:
                         'threadId': self._session_id,
                         'input': items,
                     },
+                    on_response=lambda result: self._record_active_turn(result.get('turn')),
                     on_error=lambda _err, _msg_id=msg_id: self._handle_user_input_request_error(_msg_id, _err),
                 )
                 self._trace('user_input queued to turn/start msg_id=%s', msg_id)
@@ -1037,12 +1093,15 @@ class _CodexBridge:
         cb = self._callbacks.get(msg_id)
         if cb is None:
             return
-        self._callbacks.pop(msg_id, None)
-        if self._active_msg_id == msg_id:
-            self._active_msg_id = None
-        if self._last_msg_id == msg_id:
-            self._last_msg_id = None
-            self._last_cb = None
+        with self._state_lock:
+            self._callbacks.pop(msg_id, None)
+            if self._active_msg_id == msg_id:
+                self._active_msg_id = None
+                self._active_turn_id = None
+                self._interrupt_requested = False
+            if self._last_msg_id == msg_id:
+                self._last_msg_id = None
+                self._last_cb = None
         cb(
             {
                 'id': msg_id,
@@ -1133,19 +1192,25 @@ class _CodexBridge:
             dispatch_cb = self._last_cb
 
         if dispatch_cb is not None:
-            if msg_type in ('assistant_message', 'task_complete', 'turn_aborted'):
+            if (
+                msg_type in ('task_complete', 'turn_aborted')
+                or (msg_type == 'assistant_message' and self._protocol != 'threads')
+            ):
                 self._complete_active_turn()
             sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
         else:
             self._trace('event dropped no callback msg_type=%s id=%s', msg_type, event.get('id'))
 
     def _complete_active_turn(self) -> None:
-        active_id = self._active_msg_id
-        if active_id:
-            self._callbacks.pop(active_id, None)
-        self._active_msg_id = None
-        self._last_msg_id = None
-        self._last_cb = None
+        with self._state_lock:
+            active_id = self._active_msg_id
+            if active_id:
+                self._callbacks.pop(active_id, None)
+            self._active_msg_id = None
+            self._active_turn_id = None
+            self._interrupt_requested = False
+            self._last_msg_id = None
+            self._last_cb = None
 
     def _flush_pending(self) -> None:
         with self._pending_lock:
