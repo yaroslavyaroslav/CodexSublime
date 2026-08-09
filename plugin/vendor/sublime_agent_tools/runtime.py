@@ -13,9 +13,19 @@ from typing import Any, Callable
 import sublime
 
 try:
-    from .phantom_markdown import minihtml, phantom_classes
+    from .phantom_markdown import (
+        ANNOTATION_CSS,
+        ANNOTATION_WRAPPER_CLASS,
+        minihtml,
+        phantom_classes,
+    )
 except ImportError:  # Allow the source repository's tests to import this module directly.
-    from phantom_markdown import minihtml, phantom_classes
+    from phantom_markdown import (
+        ANNOTATION_CSS,
+        ANNOTATION_WRAPPER_CLASS,
+        minihtml,
+        phantom_classes,
+    )
 
 
 _HUNK = re.compile(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@')
@@ -257,8 +267,14 @@ class SublimeToolRuntime:
                 spec = specs[annotation_id]
                 point = view.text_point(spec['line'] - 1, spec['column'])
                 content = spec['markdown'] if self._uses_mdpopups else minihtml(spec['markdown'])
+                phantom_options = (
+                    {'css': ANNOTATION_CSS, 'wrapper_class': ANNOTATION_WRAPPER_CLASS}
+                    if self._uses_mdpopups
+                    else {}
+                )
                 phantoms.append(self._phantom_cls(
-                    sublime.Region(point, point), content, sublime.PhantomLayout.BLOCK
+                    sublime.Region(point, point), content, sublime.PhantomLayout.BLOCK,
+                    **phantom_options,
                 ))
             phantom_set = self._annotation_sets.get(key)
             if phantom_set is None:

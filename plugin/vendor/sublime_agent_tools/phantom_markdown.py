@@ -12,6 +12,17 @@ _INLINE_CODE = re.compile(r'`([^`]+)`')
 _STRONG = re.compile(r'\*\*([^*]+)\*\*')
 _EMPHASIS = re.compile(r'(?<!\*)\*([^*]+)\*(?!\*)')
 
+ANNOTATION_WRAPPER_CLASS = 'sublime-agent-annotation'
+ANNOTATION_CSS = f'''
+.{ANNOTATION_WRAPPER_CLASS} {{
+  display: block;
+  margin: 0.35rem 0 0.5rem 0;
+  padding: 0.55rem 0.7rem 0.1rem 0.7rem;
+  border: 1px solid color(var(--background) blend(var(--foreground) 50%));
+  border-radius: 0.25rem;
+}}
+'''
+
 
 def minihtml(markdown: str) -> str:
     """Render the small Markdown subset needed by explanatory phantoms."""
@@ -28,7 +39,11 @@ def minihtml(markdown: str) -> str:
             blocks.append(block)
         else:
             blocks.append(f'<p>{block.replace(chr(10), "<br>")}</p>')
-    return '<body><div class="sublime-agent-annotation">' + ''.join(blocks) + '</div></body>'
+    return (
+        f'<body><style>{ANNOTATION_CSS}</style><div class="{ANNOTATION_WRAPPER_CLASS}">'
+        + ''.join(blocks)
+        + '</div></body>'
+    )
 
 
 def phantom_classes(sublime_module: Any) -> tuple[type[Any], type[Any], bool]:
