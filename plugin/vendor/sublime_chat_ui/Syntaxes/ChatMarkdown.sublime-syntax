@@ -112,15 +112,11 @@ contexts:
     - meta_scope: meta.section.heading.1.markdown
     - match: '^(?={{chat_section_break}})'
       pop: 1
-    - match: '^(?={{atx_heading}})'
-      pop: 1
     - include: markdown
 
   section2-body:
     - meta_scope: meta.section.heading.2.markdown
     - match: '^(?={{chat_section_break}})'
-      pop: 1
-    - match: '^(?={{atx_heading}})'
       pop: 1
     - include: markdown
 
@@ -128,15 +124,11 @@ contexts:
     - meta_scope: meta.section.heading.3.markdown
     - match: '^(?={{chat_section_break}})'
       pop: 1
-    - match: '^(?={{atx_heading}})'
-      pop: 1
     - include: markdown
 
   section4-body:
     - meta_scope: meta.section.heading.4.markdown
     - match: '^(?={{chat_section_break}})'
-      pop: 1
-    - match: '^(?={{atx_heading}})'
       pop: 1
     - include: markdown
 
@@ -144,14 +136,10 @@ contexts:
     - meta_scope: meta.section.heading.5.markdown
     - match: '^(?={{chat_section_break}})'
       pop: 1
-    - match: '^(?={{atx_heading}})'
-      pop: 1
     - include: markdown
 
   section6-body:
     - meta_scope: meta.section.heading.6.markdown
     - match: '^(?={{chat_section_break}})'
-      pop: 1
-    - match: '^(?={{atx_heading}})'
       pop: 1
     - include: markdown
