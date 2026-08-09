@@ -1098,7 +1098,7 @@ class CodexInputPanelEventListener(sublime_plugin.EventListener):
             return None
 
         group, _ = window.get_view_index(view)
-        flags = sublime.ENCODED_POSITION | sublime.FORCE_GROUP
+        flags = sublime.ENCODED_POSITION
         if command_args.get('additive'):
             flags |= sublime.ADD_TO_SELECTION
         window.open_file(target, flags, group)
