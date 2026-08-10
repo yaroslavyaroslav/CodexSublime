@@ -1,4 +1,4 @@
 interface:
   display_name: "Sublime Explain Diff"
-  short_description: "Explain PR architecture in Sublime diffs"
-  default_prompt: "Use $sublime-explain-diff to explain this PR as a coherent architectural narrative and add selective deep-dive annotations in Sublime Text."
+  short_description: "Explain PRs flexibly in Sublime diffs"
+  default_prompt: "Use $sublime-explain-diff to explain this PR in Sublime; unless I specify another format, use a coherent PR-level narrative with selective deep-dive annotations."
