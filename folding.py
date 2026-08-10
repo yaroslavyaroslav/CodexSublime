@@ -203,6 +203,17 @@ class SectionRuntime:
     ) -> SectionBlock:
         session = self.session_for(view)
         document = session.document
+        previous = document.by_key.get(mutation.key)
+        affected_index = (
+            document.blocks.index(previous)
+            if previous is not None
+            else len(document.blocks)
+        )
+        old_regions = [
+            region
+            for block in document.blocks[affected_index:]
+            if (region := _fold_region(block, self.region_factory)) is not None
+        ]
         buffer_ends_with_newline = (
             view.size() == 0 or view.substr(view.size() - 1) == "\n"
         )
@@ -219,22 +230,19 @@ class SectionRuntime:
         for bound_view in bound_views:
             session.controller(bound_view)
         controllers = list(session.bindings.values())
-        if edit.previous is not None:
-            old_region = _fold_region(edit.previous, self.region_factory)
-        else:
-            old_region = None
+        affected_blocks = document.blocks[affected_index:]
 
         for controller in controllers:
             controller.suppress_reconcile = True
         try:
-            if old_region is not None:
-                for bound_view in bound_views:
-                    # Sublime may normalize or partially shift a fold when a
-                    # live section grows. Sampling that geometry here can look
-                    # like a manual unfold and persist a false FORCE_OPEN
-                    # override. Host events reconcile real user commands;
-                    # structural edits only need to clear the old fold before
-                    # applying and folding the new exact region.
+            for bound_view in bound_views:
+                for old_region in old_regions:
+                    # Sublime may normalize or partially shift folds when an
+                    # earlier live section grows. Sampling that geometry here
+                    # can look like a manual unfold and persist a false
+                    # FORCE_OPEN override. Host events reconcile real user
+                    # commands; structural edits clear every shifted fold
+                    # before applying the edit and exact current geometry.
                     bound_view.unfold(old_region)
             self.edit_applier(view, edit)
         except Exception:
@@ -247,25 +255,25 @@ class SectionRuntime:
         for controller in controllers:
             if edit.previous is not None:
                 controller.transfer(edit.previous, edit.block)
-        new_region = (
-            _fold_region(edit.block, self.region_factory)
+        new_regions = (
+            [
+                region
+                for block in affected_blocks
+                if (region := _fold_region(block, self.region_factory)) is not None
+            ]
             if edit.previous is not None
-            else None
+            else []
         )
         for bound_view in bound_views:
-            if new_region is not None:
+            for new_region in new_regions:
                 # A buffer edit can leave Sublime with a normalized fragment
-                # of the previous fold even after the old region was
-                # unfolded.  ``is_folded(new_region)`` then reports a fold
-                # somewhere in the requested span, so FoldController would
-                # skip creating the exact replacement and expose the tail of
-                # a large live section.  Clear the post-edit geometry before
-                # applying policy; FORCE_OPEN remains open, while AUTO and
-                # FORCE_FOLDED recreate the complete current span.
+                # after the old regions were unfolded. Clear post-edit
+                # geometry before applying policy; FORCE_OPEN remains open,
+                # while AUTO and FORCE_FOLDED recreate every complete span.
                 bound_view.unfold(new_region)
             session.controller(bound_view).apply(
                 bound_view,
-                [edit.block],
+                affected_blocks,
                 fold_names,
                 self.region_factory,
                 fold_active=fold_active,

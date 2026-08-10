@@ -87,6 +87,20 @@ def apply_edit_with_post_edit_drift(view, edit):
     view.folded = [FakeRegion(span.begin, span.end - 20)]
 
 
+def apply_edit_with_following_fold_drift(view, edit):
+    delta = len(edit.text) - (edit.end - edit.begin)
+    following_folds = []
+    for region in view.folded:
+        if region.begin() < edit.end:
+            following_folds.append(region)
+            continue
+        shifted_begin = region.begin() + delta
+        shifted_end = max(shifted_begin + 1, region.end() + delta - 20)
+        following_folds.append(FakeRegion(shifted_begin, shifted_end))
+    apply_edit(view, edit)
+    view.folded = following_folds
+
+
 class FoldingTests(unittest.TestCase):
     def test_manual_open_override_survives_policy_reapplication(self):
         block = parse_sections("----------\n\n## Answer\n\nDone\n\n")[0]
@@ -260,6 +274,99 @@ class FoldingTests(unittest.TestCase):
                 body="```text\n" + ("output line\n" * 300) + "```",
             ),
             {"command call", "command output"},
+        )
+
+        self.assertEqual(view.folded, [])
+
+    def test_earlier_live_update_repairs_shifted_following_fold(self):
+        view = DriftedFoldView()
+        runtime = SectionRuntime(
+            region_factory=FakeRegion,
+            edit_applier=apply_edit_with_following_fold_drift,
+            views_for_buffer=lambda current: [current],
+        )
+        agent_key = SectionKey(namespace="codex", item_id="agent-1")
+        command_key = SectionKey(namespace="codex", item_id="command-4")
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.CREATE,
+                key=agent_key,
+                header="## agent_message",
+                body="before",
+            ),
+            {"command output"},
+        )
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.FINALIZE,
+                key=command_key,
+                header="### Command Output",
+                body="```text\n" + ("output line\n" * 100) + "```",
+            ),
+            {"command output"},
+        )
+
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.APPEND_DELTA,
+                key=agent_key,
+                header=None,
+                body=" after",
+            ),
+            {"command output"},
+        )
+
+        command = runtime.session_for(view).document.by_key[command_key]
+        assert command.fold_span is not None
+        self.assertEqual(
+            view.folded,
+            [FakeRegion(command.fold_span.begin, command.fold_span.end)],
+        )
+
+    def test_earlier_live_update_preserves_manual_open_following_section(self):
+        view = DriftedFoldView()
+        runtime = SectionRuntime(
+            region_factory=FakeRegion,
+            edit_applier=apply_edit_with_following_fold_drift,
+            views_for_buffer=lambda current: [current],
+        )
+        agent_key = SectionKey(namespace="codex", item_id="agent-2")
+        command_key = SectionKey(namespace="codex", item_id="command-5")
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.CREATE,
+                key=agent_key,
+                header="## agent_message",
+                body="before",
+            ),
+            {"command output"},
+        )
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.FINALIZE,
+                key=command_key,
+                header="### Command Output",
+                body="```text\n" + ("output line\n" * 100) + "```",
+            ),
+            {"command output"},
+        )
+        view.folded.clear()
+        runtime.reconcile(view)
+
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.APPEND_DELTA,
+                key=agent_key,
+                header=None,
+                body=" after",
+            ),
+            {"command output"},
         )
 
         self.assertEqual(view.folded, [])
