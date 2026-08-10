@@ -26,6 +26,7 @@ class FakeView:
     def __init__(self, text=""):
         self.text = text
         self.folded = []
+        self.unfolded = []
         self._read_only = True
 
     def id(self):
@@ -47,6 +48,7 @@ class FakeView:
             self.folded.append(region)
 
     def unfold(self, region):
+        self.unfolded.append(region)
         self.folded = [candidate for candidate in self.folded if candidate != region]
 
     def is_folded(self, region):
@@ -55,6 +57,18 @@ class FakeView:
 
 def apply_edit(view, edit):
     view.text = view.text[: edit.begin] + edit.text + view.text[edit.end :]
+
+
+class DriftedFoldView(FakeView):
+    """Model a Sublime fold whose stored geometry no longer matches exactly."""
+
+    def unfold(self, region):
+        self.unfolded.append(region)
+        self.folded = [
+            candidate
+            for candidate in self.folded
+            if candidate.end() <= region.begin() or candidate.begin() >= region.end()
+        ]
 
 
 class FoldingTests(unittest.TestCase):
@@ -106,6 +120,50 @@ class FoldingTests(unittest.TestCase):
         self.assertEqual(len(view.folded), 1)
         self.assertNotIn("----------", view.substr(view.folded[0]))
         self.assertEqual(block.title, "Answer")
+
+    def test_live_update_replaces_drifted_fold_without_forcing_section_open(self):
+        view = DriftedFoldView()
+        runtime = SectionRuntime(
+            region_factory=FakeRegion,
+            edit_applier=apply_edit,
+            views_for_buffer=lambda current: [current],
+        )
+        key = SectionKey(namespace="codex", item_id="command-1")
+        started = runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.CREATE,
+                key=key,
+                header="### Command Call",
+                body="```bash\necho ok\n```",
+            ),
+            {"command call", "command output"},
+        )
+        assert started.fold_span is not None
+        view.folded = [
+            FakeRegion(started.fold_span.begin, started.fold_span.end - 1)
+        ]
+
+        completed = runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.FINALIZE,
+                key=key,
+                header="### Command Output",
+                body="```text\nok\n```",
+            ),
+            {"command call", "command output"},
+        )
+
+        assert completed.fold_span is not None
+        self.assertEqual(
+            view.folded,
+            [FakeRegion(completed.fold_span.begin, completed.fold_span.end)],
+        )
+        self.assertEqual(
+            view.unfolded,
+            [FakeRegion(started.fold_span.begin, started.fold_span.end)],
+        )
 
 
 if __name__ == "__main__":

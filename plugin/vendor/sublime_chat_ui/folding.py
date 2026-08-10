@@ -221,12 +221,6 @@ class SectionRuntime:
         controllers = list(session.bindings.values())
         if edit.previous is not None:
             old_region = _fold_region(edit.previous, self.region_factory)
-            for bound_view in bound_views:
-                session.controller(bound_view).reconcile(
-                    bound_view,
-                    [edit.previous],
-                    self.region_factory,
-                )
         else:
             old_region = None
 
@@ -235,8 +229,13 @@ class SectionRuntime:
         try:
             if old_region is not None:
                 for bound_view in bound_views:
-                    if bound_view.is_folded(old_region):
-                        bound_view.unfold(old_region)
+                    # Sublime may normalize or partially shift a fold when a
+                    # live section grows. Sampling that geometry here can look
+                    # like a manual unfold and persist a false FORCE_OPEN
+                    # override. Host events reconcile real user commands;
+                    # structural edits only need to clear the old fold before
+                    # applying and folding the new exact region.
+                    bound_view.unfold(old_region)
             self.edit_applier(view, edit)
         except Exception:
             self.invalidate_view(view)
