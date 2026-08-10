@@ -107,7 +107,7 @@ class TranscriptSteeringOrderTests(unittest.TestCase):
                 'session-1',
             )
 
-        close_index = operations.index(('append', '\n\n'))
+        close_index = operations.index(('section', None, ''))
         user_index = operations.index(('section', '## user_input\n\n', 'steer me\n\n'))
         self.assertLess(close_index, user_index)
         self.assertNotIn((window.id(), 'agent-1'), commands.STREAMING_AGENT_BLOCKS)
@@ -140,11 +140,122 @@ class TranscriptSteeringOrderTests(unittest.TestCase):
                 'session-1',
             )
 
-        close_index = operations.index(('append', '\n\n'))
+        close_index = operations.index(('section', None, ''))
         user_index = operations.index(('section', '## user_input\n\n', 'steer me\n\n'))
         error_index = operations.index(('section', '### Error\n\n', 'steer failed\n\n'))
         self.assertLess(close_index, user_index)
         self.assertLess(user_index, error_index)
+
+    def test_tool_event_does_not_split_streaming_agent_section(self) -> None:
+        window = FakeWindow()
+        operations: list[tuple] = []
+        view = FakeView(operations)
+        mutations = []
+
+        def apply_mutation(_view, mutation, _fold_names):
+            mutations.append(mutation)
+
+        with (
+            patch('plugin.commands._get_transcript_view', return_value=view),
+            patch('plugin.commands.apply_presentation'),
+            patch('plugin.commands._markdown_syntax_resource', return_value='syntax'),
+            patch('plugin.commands.apply_mutation', side_effect=apply_mutation),
+            patch('plugin.commands._get_fold_section_names', return_value=set()),
+        ):
+            commands._display_assistant_response(
+                window,
+                '',
+                {
+                    'id': 'agent-1',
+                    'msg': {
+                        'type': 'agent_message_content_delta',
+                        'delta': 'before tool ',
+                    },
+                },
+                'session-1',
+            )
+            commands._display_assistant_response(
+                window,
+                '',
+                {
+                    'id': 'command-1',
+                    'msg': {
+                        'type': 'exec_command_end',
+                        'exit_code': 0,
+                        'stdout': 'tool output',
+                    },
+                },
+                'session-1',
+            )
+            commands._display_assistant_response(
+                window,
+                '',
+                {
+                    'id': 'agent-1',
+                    'msg': {
+                        'type': 'agent_message_content_delta',
+                        'delta': 'after tool',
+                    },
+                },
+                'session-1',
+            )
+
+        self.assertEqual(
+            [mutation.kind for mutation in mutations],
+            [
+                commands.SectionMutationKind.APPEND_DELTA,
+                commands.SectionMutationKind.FINALIZE,
+                commands.SectionMutationKind.APPEND_DELTA,
+            ],
+        )
+        self.assertEqual(mutations[0].key, mutations[2].key)
+        self.assertEqual(
+            [mutations[0].body, mutations[2].body],
+            ['before tool ', 'after tool'],
+        )
+        self.assertNotIn('append', [operation[0] for operation in operations])
+
+    def test_concurrent_agent_items_keep_distinct_section_keys(self) -> None:
+        window = FakeWindow()
+        operations: list[tuple] = []
+        view = FakeView(operations)
+        mutations = []
+
+        def apply_mutation(_view, mutation, _fold_names):
+            mutations.append(mutation)
+
+        with (
+            patch('plugin.commands._get_transcript_view', return_value=view),
+            patch('plugin.commands.apply_presentation'),
+            patch('plugin.commands._markdown_syntax_resource', return_value='syntax'),
+            patch('plugin.commands.apply_mutation', side_effect=apply_mutation),
+            patch('plugin.commands._get_fold_section_names', return_value=set()),
+        ):
+            for item_id, delta in (
+                ('agent-1', 'first-a'),
+                ('agent-2', 'second'),
+                ('agent-1', 'first-b'),
+            ):
+                commands._display_assistant_response(
+                    window,
+                    '',
+                    {
+                        'id': item_id,
+                        'msg': {
+                            'type': 'agent_message_content_delta',
+                            'delta': delta,
+                        },
+                    },
+                    'session-1',
+                )
+
+        self.assertEqual(mutations[0].key, mutations[2].key)
+        self.assertNotEqual(mutations[0].key, mutations[1].key)
+        self.assertEqual(
+            [mutation.body for mutation in mutations],
+            ['first-a', 'second', 'first-b'],
+        )
+        self.assertNotIn('append', [operation[0] for operation in operations])
 
 
 if __name__ == '__main__':

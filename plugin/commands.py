@@ -28,7 +28,6 @@ from .vendor.sublime_chat_ui.links import local_file_target, markdown_link_at
 from .vendor.sublime_chat_ui.markdown import selection_markdown
 from .vendor.sublime_chat_ui.presentation import (
     OUTPUT_PRESENTATION,
-    append_markdown_section,
     apply_presentation,
     clear_view,
     prepare_input_panel,
@@ -159,14 +158,29 @@ def _flush_pending_user_inputs(window: sublime.Window) -> None:  # type: ignore[
 def _release_streaming_agent_messages(
     window: sublime.Window,  # type: ignore[name-defined]
     target_view: sublime.View,  # type: ignore[name-defined]
+    session_id: str,
 ) -> bool:
     window_id = window.id()
     keys = [key for key in STREAMING_AGENT_BLOCKS if key[0] == window_id]
     if not keys:
         return False
+    fold_names = _get_fold_section_names(window)
     for key in keys:
-        STREAMING_AGENT_BLOCKS.pop(key, None)
-    target_view.run_command('append', {'characters': '\n\n', 'force': True})
+        state = STREAMING_AGENT_BLOCKS.pop(key, {})
+        section_key = live_item_key(state.get('session_id') or session_id, key[1])
+        if section_key is None:
+            target_view.run_command('append', {'characters': '\n\n', 'force': True})
+            continue
+        apply_mutation(
+            target_view,
+            SectionMutation(
+                kind=SectionMutationKind.FINALIZE,
+                key=section_key,
+                header=None,
+                body='',
+            ),
+            fold_names,
+        )
     return True
 
 
@@ -352,7 +366,14 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
 
     stream_key = _agent_stream_key(window, event, msg)
     if msg_type == 'agent_message_content_delta':
-        _append_agent_message_delta(window, target_view, is_panel, stream_key, msg)
+        _append_agent_message_delta(
+            window,
+            target_view,
+            is_panel,
+            stream_key,
+            msg,
+            session_id,
+        )
         return
 
     if msg_type == 'agent_message' and stream_key is not None:
@@ -360,11 +381,41 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
         if streaming_state is not None:
             streamed = streaming_state.get('text', '')
             final_text = _extract_text(msg) or ''
-            if not final_text or final_text.startswith(streamed):
-                suffix = final_text[len(streamed):] if final_text else ''
-                if suffix:
-                    target_view.run_command('append', {'characters': suffix, 'force': True})
-                target_view.run_command('append', {'characters': '\n\n', 'force': True})
+            section_key = live_item_key(session_id, stream_key[1])
+            if section_key is not None:
+                fold_names = _get_fold_section_names(window)
+                if not final_text or final_text.startswith(streamed):
+                    apply_mutation(
+                        target_view,
+                        SectionMutation(
+                            kind=SectionMutationKind.FINALIZE,
+                            key=section_key,
+                            header=None,
+                            body=final_text[len(streamed):] if final_text else '',
+                        ),
+                        fold_names,
+                    )
+                else:
+                    apply_mutation(
+                        target_view,
+                        SectionMutation(
+                            kind=SectionMutationKind.UPSERT,
+                            key=section_key,
+                            header=None,
+                            body=final_text,
+                        ),
+                        fold_names,
+                    )
+                    apply_mutation(
+                        target_view,
+                        SectionMutation(
+                            kind=SectionMutationKind.FINALIZE,
+                            key=section_key,
+                            header=None,
+                            body='',
+                        ),
+                        fold_names,
+                    )
                 STREAMING_AGENT_BLOCKS.pop(stream_key, None)
                 target_view.set_read_only(True)
                 if is_panel:
@@ -375,12 +426,15 @@ def _display_assistant_response(window: sublime.Window, prompt: str, event: dict
             released_stream = True
 
     if msg_type in {'error', 'task_complete', 'turn_aborted'}:
-        if _release_streaming_agent_messages(window, target_view):
+        if _release_streaming_agent_messages(window, target_view, session_id):
             target_view.set_read_only(True)
             _flush_pending_user_inputs(window)
             target_view.set_read_only(False)
     elif msg_type == 'agent_message' and stream_key is None:
-        released_stream = _release_streaming_agent_messages(window, target_view) or released_stream
+        released_stream = (
+            _release_streaming_agent_messages(window, target_view, session_id)
+            or released_stream
+        )
 
     if msg_type in HIDDEN_TRANSCRIPT_TYPES:
         _cmd_trace('suppress transcript msg_type=%s', msg_type)
@@ -831,6 +885,7 @@ def _append_agent_message_delta(
     is_panel: bool,
     stream_key: tuple[int, str] | None,
     msg: dict,
+    session_id: str,
 ) -> None:
     delta = msg.get('delta')
     if not isinstance(delta, str) or not delta:
@@ -846,15 +901,27 @@ def _append_agent_message_delta(
 
     state = STREAMING_AGENT_BLOCKS.get(stream_key)
     if state is None:
-        state = {'text': '', 'started': ''}
+        state = {'text': '', 'started': '', 'session_id': session_id}
         STREAMING_AGENT_BLOCKS[stream_key] = state
 
     if not state.get('started'):
-        append_markdown_section(target_view, '## agent_message\n\n')
         state['started'] = '1'
 
     state['text'] = state.get('text', '') + delta
-    target_view.run_command('append', {'characters': delta, 'force': True})
+    section_key = live_item_key(session_id, stream_key[1])
+    if section_key is None:
+        target_view.run_command('append', {'characters': delta, 'force': True})
+    else:
+        apply_mutation(
+            target_view,
+            SectionMutation(
+                kind=SectionMutationKind.APPEND_DELTA,
+                key=section_key,
+                header='## agent_message\n\n',
+                body=delta,
+            ),
+            _get_fold_section_names(window),
+        )
     target_view.show(target_view.size())
     target_view.set_read_only(True)
     if is_panel:
