@@ -71,6 +71,22 @@ class DriftedFoldView(FakeView):
         ]
 
 
+class PostEditDriftedFoldView(DriftedFoldView):
+    """Model Sublime retaining a shortened fold after the buffer edit."""
+
+    def __init__(self, text=""):
+        super().__init__(text)
+        self.drift_after_edit = False
+
+
+def apply_edit_with_post_edit_drift(view, edit):
+    apply_edit(view, edit)
+    if not view.drift_after_edit or edit.block.fold_span is None:
+        return
+    span = edit.block.fold_span
+    view.folded = [FakeRegion(span.begin, span.end - 20)]
+
+
 class FoldingTests(unittest.TestCase):
     def test_manual_open_override_survives_policy_reapplication(self):
         block = parse_sections("----------\n\n## Answer\n\nDone\n\n")[0]
@@ -162,8 +178,91 @@ class FoldingTests(unittest.TestCase):
         )
         self.assertEqual(
             view.unfolded,
-            [FakeRegion(started.fold_span.begin, started.fold_span.end)],
+            [
+                FakeRegion(started.fold_span.begin, started.fold_span.end),
+                FakeRegion(completed.fold_span.begin, completed.fold_span.end),
+            ],
         )
+
+    def test_live_update_replaces_fold_fragment_left_by_buffer_edit(self):
+        view = PostEditDriftedFoldView()
+        runtime = SectionRuntime(
+            region_factory=FakeRegion,
+            edit_applier=apply_edit_with_post_edit_drift,
+            views_for_buffer=lambda current: [current],
+        )
+        key = SectionKey(namespace="codex", item_id="command-2")
+        started = runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.CREATE,
+                key=key,
+                header="### Command Call",
+                body="```bash\nsed -n 1,300p script.sh\n```",
+            ),
+            {"command call", "command output"},
+        )
+        view.drift_after_edit = True
+
+        completed = runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.FINALIZE,
+                key=key,
+                header="### Command Output",
+                body="```text\n" + ("output line\n" * 300) + "```",
+            ),
+            {"command call", "command output"},
+        )
+
+        assert started.fold_span is not None
+        assert completed.fold_span is not None
+        self.assertEqual(
+            view.folded,
+            [FakeRegion(completed.fold_span.begin, completed.fold_span.end)],
+        )
+        self.assertEqual(
+            view.unfolded[-2:],
+            [
+                FakeRegion(started.fold_span.begin, started.fold_span.end),
+                FakeRegion(completed.fold_span.begin, completed.fold_span.end),
+            ],
+        )
+
+    def test_post_edit_cleanup_preserves_manual_open_override(self):
+        view = PostEditDriftedFoldView()
+        runtime = SectionRuntime(
+            region_factory=FakeRegion,
+            edit_applier=apply_edit_with_post_edit_drift,
+            views_for_buffer=lambda current: [current],
+        )
+        key = SectionKey(namespace="codex", item_id="command-3")
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.CREATE,
+                key=key,
+                header="### Command Call",
+                body="```bash\necho ok\n```",
+            ),
+            {"command call", "command output"},
+        )
+        view.folded.clear()
+        runtime.reconcile(view)
+        view.drift_after_edit = True
+
+        runtime.apply_mutation(
+            view,
+            SectionMutation(
+                kind=SectionMutationKind.FINALIZE,
+                key=key,
+                header="### Command Output",
+                body="```text\n" + ("output line\n" * 300) + "```",
+            ),
+            {"command call", "command output"},
+        )
+
+        self.assertEqual(view.folded, [])
 
 
 if __name__ == "__main__":

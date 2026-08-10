@@ -247,7 +247,22 @@ class SectionRuntime:
         for controller in controllers:
             if edit.previous is not None:
                 controller.transfer(edit.previous, edit.block)
+        new_region = (
+            _fold_region(edit.block, self.region_factory)
+            if edit.previous is not None
+            else None
+        )
         for bound_view in bound_views:
+            if new_region is not None:
+                # A buffer edit can leave Sublime with a normalized fragment
+                # of the previous fold even after the old region was
+                # unfolded.  ``is_folded(new_region)`` then reports a fold
+                # somewhere in the requested span, so FoldController would
+                # skip creating the exact replacement and expose the tail of
+                # a large live section.  Clear the post-edit geometry before
+                # applying policy; FORCE_OPEN remains open, while AUTO and
+                # FORCE_FOLDED recreate the complete current span.
+                bound_view.unfold(new_region)
             session.controller(bound_view).apply(
                 bound_view,
                 [edit.block],
