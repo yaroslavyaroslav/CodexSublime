@@ -12,11 +12,16 @@ import sublime  # type: ignore
 from .codex_bridge import _CodexBridge
 
 logger = logging.getLogger(__name__)
-__all__ = ['get_bridge', 'bridges']
+__all__ = ['get_bridge', 'get_existing_bridge', 'bridges']
 
 
 # window-id -> bridge
 bridges: dict[str | int, _CodexBridge] = {}
+
+
+def get_existing_bridge(window: sublime.Window | None) -> _CodexBridge | None:  # type: ignore[name-defined]
+    key: str | int = '__global__' if window is None else window.id()
+    return bridges.get(key)
 
 
 def get_bridge(window: sublime.Window | None) -> _CodexBridge:  # type: ignore[name-defined]
@@ -29,7 +34,7 @@ def get_bridge(window: sublime.Window | None) -> _CodexBridge:  # type: ignore[n
 
     if key not in bridges:
         logger.debug('[Codex] creating new bridge for window %s', key)
-        bridges[key] = _CodexBridge()
+        bridges[key] = _CodexBridge(window)
     else:
         logger.debug('[Codex] reusing existing bridge for window %s', key)
 

@@ -29,5 +29,12 @@
             { "key": "panel_has_focus" },
             { "key": "panel", "operand": "output.codex_input" }
         ]
+    },
+    {
+        "keys": ["ctrl+c"],
+        "command": "codex_stop_execution",
+        "context": [
+            { "key": "codex_turn_running", "operator": "equal", "operand": true }
+        ]
     }
 ]

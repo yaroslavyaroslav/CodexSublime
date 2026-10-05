@@ -16,7 +16,11 @@ from typing import Any
 
 import sublime
 
+from .sublime_agent_integration import explain_diff_skill_root
+from .vendor.sublime_agent_tools import SublimeToolRuntime, dynamic_tool_namespace
+
 logger = logging.getLogger(__name__)
+AGENT_TOOLS_VERSION = 2
 
 
 def _is_debug_logging_enabled() -> bool:
@@ -136,10 +140,10 @@ def kill_process_tree(root_pid: int) -> None:  # pragma: no cover
 class _CodexBridge:
     """Manage a single `codex app-server` process and adapt it to plugin events."""
 
-    def __init__(self) -> None:
+    def __init__(self, window: sublime.Window | None) -> None:  # type: ignore[name-defined]
         settings = sublime.load_settings('Codex.sublime-settings')
         token: str = settings.get('token', '')  # type: ignore[name-defined]
-        self._window = sublime.active_window()
+        self._window = window
         self._debug_log_file: str = settings.get('debug_log_file', '/tmp/codex_sublime_bridge.log')  # type: ignore[name-defined]
 
         project_folders = self._window.folders() if self._window else []
@@ -155,6 +159,7 @@ class _CodexBridge:
             active_file_dir = None
 
         self._cwd = _best_workspace_cwd(self._project_folders, active_file_dir)
+        self._sublime_tools = SublimeToolRuntime(self._window, self._cwd)
 
         env = os.environ.copy()
         if token and token != '<your-token>':
@@ -235,6 +240,8 @@ class _CodexBridge:
         self._rpc_waiters: dict[str, dict[str, Any]] = {}
         self._callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
         self._active_msg_id: str | None = None
+        self._active_turn_id: str | None = None
+        self._interrupt_requested = False
         self._last_msg_id: str | None = None
         self._last_cb: Callable[[dict[str, Any]], None] | None = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
@@ -293,6 +300,55 @@ class _CodexBridge:
             return
         self._send_now(obj, cb)
 
+    def is_turn_active(self) -> bool:
+        with self._state_lock:
+            return self._active_msg_id is not None
+
+    def interrupt_active_turn(self) -> bool:
+        with self._state_lock:
+            if self._active_msg_id is None:
+                return False
+            if self._interrupt_requested:
+                return True
+            self._interrupt_requested = True
+            turn_id = self._active_turn_id
+
+        if self._protocol == 'threads':
+            if turn_id:
+                self._send_turn_interrupt(turn_id)
+        else:
+            self._send_request_async(
+                'interruptConversation',
+                {'conversationId': self._session_id},
+                on_error=self._handle_interrupt_error,
+            )
+        return True
+
+    def _record_active_turn(self, raw_turn: Any) -> None:
+        if not isinstance(raw_turn, dict):
+            return
+        turn_id = raw_turn.get('id')
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        with self._state_lock:
+            should_interrupt = self._interrupt_requested and self._active_turn_id != turn_id
+            self._active_turn_id = turn_id
+        if should_interrupt:
+            self._send_turn_interrupt(turn_id)
+
+    def _send_turn_interrupt(self, turn_id: str) -> None:
+        self._send_request_async(
+            'turn/interrupt',
+            {'threadId': self._session_id, 'turnId': turn_id},
+            on_error=self._handle_interrupt_error,
+        )
+
+    def _handle_interrupt_error(self, error: Any) -> None:
+        with self._state_lock:
+            self._interrupt_requested = False
+        logger.error('Failed to interrupt active Codex turn: %s', error)
+        sublime.status_message('Failed to stop Codex turn')
+
     def _bootstrap_session(self) -> None:
         try:
             self._trace('bootstrap: initialize start')
@@ -313,6 +369,7 @@ class _CodexBridge:
             self._trace('bootstrap: initialize ok')
             self._send_json({'method': 'initialized'})
             self._trace('bootstrap: initialized sent')
+            self._register_agent_skill_roots()
 
             conversation_id = self._bootstrap_modern_protocol()
             if conversation_id:
@@ -341,6 +398,22 @@ class _CodexBridge:
                     kill_process_tree(self.proc.pid)
             except Exception:
                 pass
+
+    def _register_agent_skill_roots(self) -> None:
+        skill_root = explain_diff_skill_root()
+        try:
+            self._send_request_sync(
+                'skills/extraRoots/set',
+                {'extraRoots': [skill_root]},
+                timeout=20.0,
+            )
+            self._trace('bootstrap: skill root registered path=%s', skill_root)
+        except Exception as exc:
+            # Keep the core chat usable with app-server versions that predate
+            # process-scoped skill roots; explicit skill turns will then fall
+            # back to their ordinary text prompt.
+            logger.warning('Failed to register Sublime agent skill root %s: %s', skill_root, exc)
+            self._trace('bootstrap: skill root registration failed path=%s error=%s', skill_root, exc)
 
     def _request_key(self, request_id: Any) -> str:
         return str(request_id)
@@ -426,7 +499,11 @@ class _CodexBridge:
         if modern_supported and not conversation_id:
             try:
                 self._trace('bootstrap: thread/start start')
-                created = self._send_request_sync('thread/start', {}, timeout=20.0)
+                created = self._send_request_sync(
+                    'thread/start',
+                    {'cwd': self._cwd, 'dynamicTools': [dynamic_tool_namespace()]},
+                    timeout=20.0,
+                )
                 conversation_id = self._extract_thread_id(created)
                 self._trace('bootstrap: thread/start ok conversation_id=%s', conversation_id)
             except Exception as exc:
@@ -602,6 +679,10 @@ class _CodexBridge:
 
     def _handle_v2_notification(self, method: str, params: dict[str, Any]) -> None:
         event: dict[str, Any] | None = None
+
+        if method == 'turn/started':
+            self._record_active_turn(params.get('turn'))
+            return
 
         if method == 'item/agentMessage/delta':
             item_id = str(params.get('itemId') or '')
@@ -886,30 +967,50 @@ class _CodexBridge:
 
         if method == 'item/tool/call':
             event_id = str(params.get('callId') or uuid.uuid4())
+            namespace = params.get('namespace')
+            tool = params.get('tool')
+            if isinstance(tool, str) and tool.startswith('sublime.'):
+                tool = tool.removeprefix('sublime.')
             self._dispatch_event(
                 {
                     'id': event_id,
                     'msg': {
                         'type': 'dynamic_tool_call_request',
-                        'tool': params.get('tool'),
+                        'namespace': namespace,
+                        'tool': tool,
                         'arguments': params.get('arguments'),
-                        'message': 'Dynamic tool calls are not implemented in Sublime client.',
                     },
                 }
             )
-            self._send_rpc_response(
-                request_id,
-                {
-                    'contentItems': [
-                        {
-                            'type': 'inputText',
-                            'text': 'Dynamic tool calls are not implemented in this Sublime client.',
-                        }
-                    ],
-                    'success': False,
-                },
-            )
-            self._trace('tool call auto-declined event_id=%s', event_id)
+
+            if namespace not in (None, 'sublime') or not isinstance(tool, str):
+                self._send_rpc_response(
+                    request_id,
+                    {
+                        'contentItems': [{'type': 'inputText', 'text': 'Unsupported dynamic tool namespace.'}],
+                        'success': False,
+                    },
+                )
+                self._trace('tool call rejected namespace=%s tool=%s', namespace, tool)
+                return
+
+            def finish_tool_call(response: Any) -> None:
+                self._send_rpc_response(
+                    request_id,
+                    {
+                        'contentItems': [{'type': 'inputText', 'text': response.text}],
+                        'success': response.success,
+                    },
+                )
+                self._trace(
+                    'tool call completed event_id=%s tool=%s success=%s',
+                    event_id,
+                    tool,
+                    response.success,
+                )
+
+            self._sublime_tools.execute(tool, params.get('arguments'), finish_tool_call)
+            self._trace('tool call dispatched event_id=%s tool=%s', event_id, tool)
             return
 
         self._send_rpc_error(request_id, f'Unsupported server request: {method}')
@@ -941,6 +1042,7 @@ class _CodexBridge:
                         'threadId': self._session_id,
                         'input': items,
                     },
+                    on_response=lambda result: self._record_active_turn(result.get('turn')),
                     on_error=lambda _err, _msg_id=msg_id: self._handle_user_input_request_error(_msg_id, _err),
                 )
                 self._trace('user_input queued to turn/start msg_id=%s', msg_id)
@@ -991,12 +1093,15 @@ class _CodexBridge:
         cb = self._callbacks.get(msg_id)
         if cb is None:
             return
-        self._callbacks.pop(msg_id, None)
-        if self._active_msg_id == msg_id:
-            self._active_msg_id = None
-        if self._last_msg_id == msg_id:
-            self._last_msg_id = None
-            self._last_cb = None
+        with self._state_lock:
+            self._callbacks.pop(msg_id, None)
+            if self._active_msg_id == msg_id:
+                self._active_msg_id = None
+                self._active_turn_id = None
+                self._interrupt_requested = False
+            if self._last_msg_id == msg_id:
+                self._last_msg_id = None
+                self._last_cb = None
         cb(
             {
                 'id': msg_id,
@@ -1056,6 +1161,11 @@ class _CodexBridge:
                 path = item.get('path')
                 if path:
                     out.append({'type': 'localImage', 'path': str(path)})
+            elif item_type == 'skill':
+                name = item.get('name')
+                path = item.get('path')
+                if name and path:
+                    out.append({'type': 'skill', 'name': str(name), 'path': str(path)})
         return out
 
     def _should_suppress(self, msg_type: Any) -> bool:
@@ -1082,19 +1192,25 @@ class _CodexBridge:
             dispatch_cb = self._last_cb
 
         if dispatch_cb is not None:
-            if msg_type in ('assistant_message', 'task_complete', 'turn_aborted'):
+            if (
+                msg_type in ('task_complete', 'turn_aborted')
+                or (msg_type == 'assistant_message' and self._protocol != 'threads')
+            ):
                 self._complete_active_turn()
             sublime.set_timeout(lambda _e=event, _c=dispatch_cb: _c(_e), 0)
         else:
             self._trace('event dropped no callback msg_type=%s id=%s', msg_type, event.get('id'))
 
     def _complete_active_turn(self) -> None:
-        active_id = self._active_msg_id
-        if active_id:
-            self._callbacks.pop(active_id, None)
-        self._active_msg_id = None
-        self._last_msg_id = None
-        self._last_cb = None
+        with self._state_lock:
+            active_id = self._active_msg_id
+            if active_id:
+                self._callbacks.pop(active_id, None)
+            self._active_msg_id = None
+            self._active_turn_id = None
+            self._interrupt_requested = False
+            self._last_msg_id = None
+            self._last_cb = None
 
     def _flush_pending(self) -> None:
         with self._pending_lock:
@@ -1156,6 +1272,9 @@ class _CodexBridge:
             return str(uuid.uuid4())
         settings_block = data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
+        if codex_cfg.get('agent_tools_version') != AGENT_TOOLS_VERSION:
+            codex_cfg['session_id'] = None
+            codex_cfg['agent_tools_version'] = AGENT_TOOLS_VERSION
         session_id: str | None = codex_cfg.get('session_id')
         if not session_id:
             session_id = str(uuid.uuid4())
@@ -1175,6 +1294,7 @@ class _CodexBridge:
         settings_block = data.get('settings') or {}
         codex_cfg = settings_block.get('codex') or {}
         codex_cfg['session_id'] = session_id
+        codex_cfg['agent_tools_version'] = AGENT_TOOLS_VERSION
         settings_block['codex'] = codex_cfg
         data['settings'] = settings_block
         window.set_project_data(data)

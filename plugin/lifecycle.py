@@ -6,21 +6,53 @@ import sublime  # type: ignore
 import sublime_plugin  # type: ignore
 
 from . import bridge_manager as bm
-from .chat_syntax import migrate_chat_syntax
+from .chat_syntax import TRANSCRIPT_VIEW_FLAG, migrate_chat_syntax
+from .commands import restore_configured_folds, sync_configured_folds
+from .transcript_runtime import clear_sessions, forget_view, invalidate_view, reconcile_folds
 
 logger = logging.getLogger(__name__)
+FOLD_SETTINGS_CHANGE_KEY = 'codex-fold-sections'
 
 
 class CodexWindowEventListener(sublime_plugin.EventListener):
     """Clean up Codex bridges when their associated window is closed."""
 
     def on_load(self, view: sublime.View) -> None:  # type: ignore[override]
-        migrate_chat_syntax(view)
+        migrated = migrate_chat_syntax(view)
+        window = view.window()
+        if window is not None and (migrated or view.settings().get(TRANSCRIPT_VIEW_FLAG)):
+            restore_configured_folds(window, view)
 
     def on_activated(self, view: sublime.View) -> None:  # type: ignore[override]
         migrate_chat_syntax(view)
+        if view.settings().get(TRANSCRIPT_VIEW_FLAG):
+            reconcile_folds(view)
+
+    def on_post_text_command(
+        self,
+        view: sublime.View,  # type: ignore[override]
+        command_name: str,
+        args: dict | None,
+    ) -> None:
+        del command_name, args
+        if view.settings().get(TRANSCRIPT_VIEW_FLAG):
+            reconcile_folds(view)
+
+    def on_reload(self, view: sublime.View) -> None:  # type: ignore[override]
+        if not view.settings().get(TRANSCRIPT_VIEW_FLAG):
+            return
+        invalidate_view(view)
+        window = view.window()
+        if window is not None:
+            restore_configured_folds(window, view)
+
+    def on_revert(self, view: sublime.View) -> None:  # type: ignore[override]
+        self.on_reload(view)
 
     def on_pre_close(self, view: sublime.View) -> None:  # type: ignore[override]
+        if view.settings().get(TRANSCRIPT_VIEW_FLAG):
+            reconcile_folds(view)
+            forget_view(view)
         window = view.window()
 
         if window is None:
@@ -77,15 +109,38 @@ def _migrate_open_chat_views() -> None:
 
     for window in sublime.windows():
         for view in window.views():
-            migrate_chat_syntax(view)
+            migrated = migrate_chat_syntax(view)
+            if migrated or view.settings().get(TRANSCRIPT_VIEW_FLAG):
+                restore_configured_folds(window, view)
 
         panel = window.find_output_panel('codex')
         if panel is not None:
             migrate_chat_syntax(panel)
+            restore_configured_folds(window, panel)
+
+
+def _sync_open_chat_folds() -> None:
+    """Apply changed fold settings to chats that are already open."""
+
+    for window in sublime.windows():
+        for view in window.views():
+            if view.settings().get(TRANSCRIPT_VIEW_FLAG):
+                sync_configured_folds(window, view)
+
+        panel = window.find_output_panel('codex')
+        if panel is not None:
+            sync_configured_folds(window, panel)
+
+
+def _on_fold_settings_changed() -> None:
+    sublime.set_timeout(_sync_open_chat_folds, 0)
 
 
 def plugin_loaded() -> None:  # noqa: D401 – ST hook
     logger.debug('plugin_loaded – plugin is active')
+    settings = sublime.load_settings('Codex.sublime-settings')
+    settings.clear_on_change(FOLD_SETTINGS_CHANGE_KEY)
+    settings.add_on_change(FOLD_SETTINGS_CHANGE_KEY, _on_fold_settings_changed)
     _migrate_open_chat_views()
     # Session restoration may finish after plugin_loaded() on startup.
     sublime.set_timeout(_migrate_open_chat_views, 1_000)
@@ -94,6 +149,8 @@ def plugin_loaded() -> None:  # noqa: D401 – ST hook
 
 def plugin_unloaded() -> None:  # noqa: D401 - ST hook
     logger.debug('plugin_unloaded – cleaning up bridges')
+    sublime.load_settings('Codex.sublime-settings').clear_on_change(FOLD_SETTINGS_CHANGE_KEY)
+    clear_sessions()
     for key, bridge in list(bm.bridges.items()):
         bridge.terminate()
         bm.bridges.pop(key, None)

@@ -3,6 +3,7 @@
 from .history import PromptHistorySession
 from .links import MarkdownLink, local_file_target, markdown_link_at
 from .markdown import fenced_code, section_break, selection_markdown
+from .folding import FoldController, FoldOverride, SectionRuntime, section_key
 from .presentation import (
     INPUT_PRESENTATION,
     OUTPUT_PRESENTATION,
@@ -20,13 +21,44 @@ from .presentation import (
     syntax_resource,
     view_text,
 )
+from .sections import (
+    DEFAULT_SECTION_FORMAT,
+    SectionBlock,
+    SectionDocument,
+    SectionEdit,
+    SectionFormat,
+    SectionKey,
+    SectionLayout,
+    SectionMutation,
+    SectionMutationKind,
+    SectionStatus,
+    SerializedSection,
+    TextSpan,
+    parse_sections,
+    serialize_section,
+)
 
 __all__ = [
     "INPUT_PRESENTATION",
+    "DEFAULT_SECTION_FORMAT",
+    "FoldController",
+    "FoldOverride",
     "MarkdownLink",
     "OUTPUT_PRESENTATION",
     "PanelPresentation",
     "PromptHistorySession",
+    "SectionBlock",
+    "SectionDocument",
+    "SectionEdit",
+    "SectionFormat",
+    "SectionKey",
+    "SectionLayout",
+    "SectionMutation",
+    "SectionMutationKind",
+    "SectionRuntime",
+    "SectionStatus",
+    "SerializedSection",
+    "TextSpan",
     "append_markdown_section",
     "append_text",
     "apply_presentation",
@@ -35,12 +67,15 @@ __all__ = [
     "local_file_target",
     "markdown_link_at",
     "move_caret_to_end",
+    "parse_sections",
     "prepare_input_panel",
     "prepare_output_panel",
     "replace_content",
     "scroll_to_end",
     "section_break",
     "selection_markdown",
+    "serialize_section",
+    "section_key",
     "show_panel",
     "syntax_resource",
     "view_text",
