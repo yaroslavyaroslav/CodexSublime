@@ -50,6 +50,9 @@ Point out the downloaded codex binary from within plugin settings:
     1. With Package Control
         `Package Control: Install Package` → **Codex**
 
+        Package Control installs Codex as an unpacked directory so Sublime can
+        import the bundled libraries under `plugin/vendor`.
+
     2. Manual
         Clone / download into your `Packages` folder (e.g. `~/Library/Application Support/Sublime Text/Packages/Codex`).
 
